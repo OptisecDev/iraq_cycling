@@ -1,0 +1,10 @@
+build/
+.dart_tool/
+.packages
+*.iml
+.idea/
+*.keystore
+*.jks
+key.properties
+.flutter-plugins
+.flutter-plugins-dependencies
