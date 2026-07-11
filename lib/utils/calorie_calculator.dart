@@ -7,6 +7,47 @@ const int placeholderAgeYears = 30;
 
 enum Gender { male, female }
 
+/// Resolves the weight to use for a calorie calculation: a saved profile
+/// value if one exists, otherwise the documented placeholder above.
+double resolveWeightKg(double? profileWeightKg) =>
+    profileWeightKg ?? placeholderWeightKg;
+
+/// Resolves the age to use for a calorie calculation: a saved profile value
+/// if one exists, otherwise the documented placeholder above.
+int resolveAgeYears(int? profileAgeYears) =>
+    profileAgeYears ?? placeholderAgeYears;
+
+/// Resolves the gender to use for a calorie calculation: a saved profile
+/// value if one exists, otherwise the same male default the Keytel formula
+/// always used before a profile had a gender field.
+Gender resolveGender(Gender? profileGender) => profileGender ?? Gender.male;
+
+/// The Keytel et al. (2005) HR-based kcal/min rate, factored out of
+/// [estimateCaloriesBurned] so a live per-sample accumulator (see
+/// [LiveCalorieAccumulator]) can reuse the exact same formula instead of
+/// duplicating it.
+///
+/// Negative regression output (possible at very low HR) is floored at zero,
+/// same rationale as [estimateCaloriesBurned]'s end-of-ride clamp.
+double caloriesPerMinuteFromHeartRate({
+  required num heartRateBpm,
+  required double weightKg,
+  required int ageYears,
+  required Gender gender,
+}) {
+  final kJPerMinute = gender == Gender.male
+      ? -55.0969 +
+            (0.6309 * heartRateBpm) +
+            (0.1988 * weightKg) +
+            (0.2017 * ageYears)
+      : -20.4022 +
+            (0.4472 * heartRateBpm) -
+            (0.1263 * weightKg) +
+            (0.074 * ageYears);
+  final kcalPerMinute = kJPerMinute / 4.184;
+  return kcalPerMinute < 0 ? 0 : kcalPerMinute;
+}
+
 /// Estimates calories burned for a ride.
 ///
 /// When [avgHeartRate] is available, uses the Keytel et al. (2005) HR-based
@@ -37,21 +78,13 @@ double estimateCaloriesBurned({
   if (durationMinutes <= 0) return 0;
 
   if (avgHeartRate != null) {
-    final kJPerMinute = gender == Gender.male
-        ? -55.0969 +
-              (0.6309 * avgHeartRate) +
-              (0.1988 * weightKg) +
-              (0.2017 * ageYears)
-        : -20.4022 +
-              (0.4472 * avgHeartRate) -
-              (0.1263 * weightKg) +
-              (0.074 * ageYears);
-    final kcalPerMinute = kJPerMinute / 4.184;
-    final totalKcal = kcalPerMinute * durationMinutes;
-    // A negative regression output (possible at very low HR/short rides)
-    // isn't a plausible calorie burn — floor at zero rather than reporting
-    // negative calories.
-    return totalKcal < 0 ? 0 : totalKcal;
+    final kcalPerMinute = caloriesPerMinuteFromHeartRate(
+      heartRateBpm: avgHeartRate,
+      weightKg: weightKg,
+      ageYears: ageYears,
+      gender: gender,
+    );
+    return kcalPerMinute * durationMinutes;
   }
 
   final met = _cyclingMetFromSpeed(avgSpeedKmh);
@@ -69,4 +102,64 @@ double _cyclingMetFromSpeed(double avgSpeedKmh) {
   if (avgSpeedKmh < 22) return 10.0;
   if (avgSpeedKmh < 25) return 12.0;
   return 15.8;
+}
+
+/// Accumulates a running calorie total from live BLE heart rate samples
+/// during an active ride, using [caloriesPerMinuteFromHeartRate] for each
+/// inter-sample gap — separate from [estimateCaloriesBurned], which computes
+/// a single end-of-ride total from the ride's average HR and stays the
+/// source of truth for the persisted `Ride.caloriesBurned` value.
+class LiveCalorieAccumulator {
+  LiveCalorieAccumulator({
+    required this.weightKg,
+    required this.ageYears,
+    required this.gender,
+  });
+
+  final double weightKg;
+  final int ageYears;
+  final Gender gender;
+
+  static const _minValidBpm = 40;
+  static const _maxValidBpm = 220;
+  // A gap this long between samples almost always means a BLE reconnection
+  // (e.g. the GATT status=147 timeout documented in PROJECT_STATE.md), not
+  // continuous exertion — charging the full gap at the last known HR would
+  // inflate the total, so it's capped here instead.
+  static const _maxGapBetweenSamples = Duration(minutes: 2);
+
+  double _totalCalories = 0;
+  DateTime? _lastSampleAt;
+
+  double get totalCalories => _totalCalories;
+
+  /// Folds one heart rate reading into the running total. Readings outside
+  /// [_minValidBpm]-[_maxValidBpm] are sensor glitches and are dropped, but
+  /// still move the gap anchor forward so a later valid reading isn't
+  /// charged for the glitchy period too.
+  void addSample(int heartRateBpm, {DateTime? timestamp}) {
+    final now = timestamp ?? DateTime.now();
+    final lastSampleAt = _lastSampleAt;
+    _lastSampleAt = now;
+
+    if (heartRateBpm < _minValidBpm || heartRateBpm > _maxValidBpm) return;
+    if (lastSampleAt == null) return;
+
+    var elapsed = now.difference(lastSampleAt);
+    if (elapsed.isNegative) return;
+    if (elapsed > _maxGapBetweenSamples) elapsed = _maxGapBetweenSamples;
+
+    final kcalPerMinute = caloriesPerMinuteFromHeartRate(
+      heartRateBpm: heartRateBpm,
+      weightKg: weightKg,
+      ageYears: ageYears,
+      gender: gender,
+    );
+    _totalCalories += kcalPerMinute * (elapsed.inMilliseconds / 60000);
+  }
+
+  void reset() {
+    _totalCalories = 0;
+    _lastSampleAt = null;
+  }
 }
