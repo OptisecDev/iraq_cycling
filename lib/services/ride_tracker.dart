@@ -6,26 +6,51 @@ import 'package:geolocator/geolocator.dart';
 
 import '../models/ride.dart';
 import '../models/ride_point.dart';
+import '../models/traffic_hazard.dart';
 import '../utils/calorie_calculator.dart';
 import '../utils/distance_calculator.dart';
+import '../utils/hazard_proximity.dart';
+import 'hazard_repository.dart';
 import 'heart_rate_service.dart';
 import 'location_service.dart';
+import 'user_profile_repository.dart';
+import 'voice_alert_service.dart';
 
 enum TrackingState { idle, tracking, paused, finished }
 
 class RideTracker extends ChangeNotifier {
-  RideTracker({LocationService? locationService, HeartRateService? heartRateService})
-    : _locationService = locationService ?? LocationService(),
-      _heartRateService = heartRateService;
+  RideTracker({
+    LocationService? locationService,
+    HeartRateService? heartRateService,
+    UserProfileRepository? userProfileRepository,
+    HazardRepository? hazardRepository,
+    VoiceAlertService? voiceAlertService,
+  }) : _locationService = locationService ?? LocationService(),
+       _heartRateService = heartRateService,
+       _userProfileRepository = userProfileRepository,
+       _hazardRepository = hazardRepository,
+       _voiceAlertService = voiceAlertService;
 
   final LocationService _locationService;
   // Optional: a ride tracks and saves fine with no heart rate sensor
   // connected at all — this stays null in that case and avgHeartRate is
   // simply never computed.
   final HeartRateService? _heartRateService;
+  // Optional: without a profile, calorie estimates fall back to the same
+  // placeholders calorie_calculator.dart always used (see resolveWeightKg/
+  // resolveAgeYears below).
+  final UserProfileRepository? _userProfileRepository;
+  // Optional: with no hazards defined (or no repository/voice service
+  // supplied at all), a ride tracks and saves exactly as before — nothing
+  // is ever checked or spoken.
+  final HazardRepository? _hazardRepository;
+  final VoiceAlertService? _voiceAlertService;
+  List<TrafficHazard> _hazards = const [];
+  final Set<int> _triggeredHazardIds = {};
   StreamSubscription<int>? _bpmSubscription;
   int _bpmSum = 0;
   int _bpmSampleCount = 0;
+  LiveCalorieAccumulator? _liveCalorieAccumulator;
 
   StreamSubscription<Position>? _positionSubscription;
 
@@ -45,6 +70,11 @@ class RideTracker extends ChangeNotifier {
   double _maxSpeedMps = 0;
   double _totalElevationGainMeters = 0;
 
+  /// Running calorie total for the in-progress ride, updated live as BPM
+  /// samples arrive. Separate from `Ride.caloriesBurned`, which is only
+  /// computed once at [finishRide] from the ride's average heart rate.
+  double get liveCalories => _liveCalorieAccumulator?.totalCalories ?? 0;
+
   Future<String?> startRide() async {
     final granted = await _locationService.ensurePermissionsGranted();
     if (!granted) {
@@ -59,6 +89,14 @@ class RideTracker extends ChangeNotifier {
     _instantSpeedMps = 0;
     _bpmSum = 0;
     _bpmSampleCount = 0;
+    final profile = _userProfileRepository?.current;
+    _liveCalorieAccumulator = LiveCalorieAccumulator(
+      weightKg: resolveWeightKg(profile?.weightKg),
+      ageYears: resolveAgeYears(profile?.age),
+      gender: resolveGender(profile?.gender),
+    );
+    _triggeredHazardIds.clear();
+    _hazards = await _hazardRepository?.getAll() ?? const [];
 
     _currentRide = Ride(startTime: DateTime.now());
     _state = TrackingState.tracking;
@@ -98,6 +136,8 @@ class RideTracker extends ChangeNotifier {
     if (_state != TrackingState.tracking) return;
     _bpmSum += bpm;
     _bpmSampleCount += 1;
+    _liveCalorieAccumulator?.addSample(bpm);
+    notifyListeners();
   }
 
   void _onPosition(Position position) {
@@ -116,6 +156,8 @@ class RideTracker extends ChangeNotifier {
     if (point.speed > _maxSpeedMps) {
       _maxSpeedMps = point.speed;
     }
+
+    _checkHazards(point);
 
     final lastPoint = _lastValidPoint;
     if (lastPoint == null) {
@@ -155,6 +197,25 @@ class RideTracker extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Speaks a warning (fire-and-forget) for each hazard whose radius the
+  /// rider has just entered, at most once per hazard per ride.
+  void _checkHazards(RidePoint point) {
+    final voiceAlertService = _voiceAlertService;
+    if (_hazards.isEmpty || voiceAlertService == null) return;
+
+    final newlyTriggered = newlyTriggeredHazardIds(
+      latitude: point.latitude,
+      longitude: point.longitude,
+      hazards: _hazards,
+      alreadyTriggered: _triggeredHazardIds,
+    );
+    for (final id in newlyTriggered) {
+      _triggeredHazardIds.add(id);
+      final hazard = _hazards.firstWhere((h) => h.id == id);
+      voiceAlertService.announce(hazard.message);
+    }
+  }
+
   void pauseRide() {
     if (_state != TrackingState.tracking) return;
     _state = TrackingState.paused;
@@ -182,16 +243,19 @@ class RideTracker extends ChangeNotifier {
 
     // Null when no heart rate sensor was connected for this ride — the
     // ride is saved exactly as it was in Phase 1 in that case.
-    final avgHeartRate =
-        _bpmSampleCount > 0 ? _bpmSum / _bpmSampleCount : null;
+    final avgHeartRate = _bpmSampleCount > 0 ? _bpmSum / _bpmSampleCount : null;
     final finishedRide = ride.copyWith(
       endTime: DateTime.now(),
       avgHeartRate: avgHeartRate,
     );
+    final profile = _userProfileRepository?.current;
     final caloriesBurned = estimateCaloriesBurned(
       duration: finishedRide.duration,
       avgHeartRate: avgHeartRate,
       avgSpeedKmh: finishedRide.avgSpeedKmh,
+      weightKg: resolveWeightKg(profile?.weightKg),
+      ageYears: resolveAgeYears(profile?.age),
+      gender: resolveGender(profile?.gender),
     );
 
     _currentRide = finishedRide.copyWith(caloriesBurned: caloriesBurned);
@@ -214,6 +278,9 @@ class RideTracker extends ChangeNotifier {
     _instantSpeedMps = 0;
     _bpmSum = 0;
     _bpmSampleCount = 0;
+    _liveCalorieAccumulator = null;
+    _triggeredHazardIds.clear();
+    _hazards = const [];
     _state = TrackingState.idle;
     notifyListeners();
   }

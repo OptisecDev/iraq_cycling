@@ -7,7 +7,9 @@ import '../services/ride_tracker.dart';
 import '../utils/format_utils.dart';
 import '../widgets/stat_column.dart';
 import 'download_map_screen.dart';
+import 'hazard_management_screen.dart';
 import 'heart_rate_pairing_screen.dart';
+import 'profile_screen.dart';
 import 'ride_history_screen.dart';
 import 'ride_map_view.dart';
 
@@ -55,7 +57,8 @@ class TrackingScreen extends StatelessWidget {
           ),
           Consumer<HeartRateService>(
             builder: (context, heartRateService, child) {
-              final connected = heartRateService.connectionState ==
+              final connected =
+                  heartRateService.connectionState ==
                   HeartRateConnectionState.connected;
               return IconButton(
                 icon: Icon(
@@ -78,6 +81,20 @@ class TrackingScreen extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const RideHistoryScreen()),
             ),
           ),
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            tooltip: 'الملف الشخصي',
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const ProfileScreen())),
+          ),
+          IconButton(
+            icon: const Icon(Icons.warning_amber_outlined),
+            tooltip: 'نقاط الخطر',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const HazardManagementScreen()),
+            ),
+          ),
         ],
       ),
       body: SafeArea(
@@ -90,7 +107,8 @@ class TrackingScreen extends StatelessWidget {
             final elevationGain = ride?.totalElevationGainMeters ?? 0;
 
             final heartRateService = context.watch<HeartRateService>();
-            final heartRateConnected = heartRateService.connectionState ==
+            final heartRateConnected =
+                heartRateService.connectionState ==
                 HeartRateConnectionState.connected;
             final bpmValue = heartRateConnected
                 ? (heartRateService.latestBpm?.toString() ?? '--')
@@ -167,6 +185,11 @@ class TrackingScreen extends StatelessWidget {
                                       StatColumn(
                                         label: 'نبض القلب',
                                         value: bpmValue,
+                                      ),
+                                      StatColumn(
+                                        label: 'السعرات الحرارية',
+                                        value: tracker.liveCalories
+                                            .toStringAsFixed(0),
                                       ),
                                     ],
                                   ),
