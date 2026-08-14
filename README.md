@@ -1,5 +1,7 @@
 # iraq_cycling
 
+[![CI](https://github.com/OptisecDev/iraq_cycling/actions/workflows/ci.yml/badge.svg)](https://github.com/OptisecDev/iraq_cycling/actions/workflows/ci.yml)
+
 An Arabic-first GPS ride-tracking app for cyclists in Iraq (Baghdad-focused),
 built with Flutter. Fully offline-capable: rides, maps, and the rider profile
 all work with no backend and no network connection once tiles are cached.
