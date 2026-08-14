@@ -121,6 +121,9 @@ class TrackingScreen extends StatelessWidget {
                   child: RideMapView(
                     points: ride?.points ?? const [],
                     isLive: tracker.state == TrackingState.tracking,
+                    heartRateBpm: heartRateService.latestBpm,
+                    heartRateConnected: heartRateConnected,
+                    liveCalories: tracker.liveCalories,
                   ),
                 ),
                 Expanded(

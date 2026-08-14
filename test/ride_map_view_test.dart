@@ -51,6 +51,17 @@ void main() {
   MapCamera cameraOf(WidgetTester tester) =>
       MapController.of(tester.element(find.byType(TileLayer))).camera;
 
+  // The live map's HUD includes a heart icon that pulses on an infinitely
+  // repeating AnimationController (see _PulsingHeart in ride_map_view.dart)
+  // while isLive is true - pumpAndSettle() never terminates against that
+  // (it always has a pending frame scheduled), so tests that render the
+  // live map pump a bounded number of frames instead.
+  Future<void> pumpSettled(WidgetTester tester) async {
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
   double tiltMatrixEntry11(WidgetTester tester) => tester
       .widget<AnimatedContainer>(find.byType(AnimatedContainer))
       .transform!
@@ -62,10 +73,10 @@ void main() {
       // Due-east movement (~56m, well past the jitter floor) at a stop.
       final stopped = [_point(33.3000, 44.3000, 0, 0), _point(33.3000, 44.3006, 0, 5)];
       await tester.pumpWidget(harness([stopped.first], true));
-      await tester.pumpAndSettle();
+      await pumpSettled(tester);
 
       await tester.pumpWidget(harness(stopped, true));
-      await tester.pumpAndSettle();
+      await pumpSettled(tester);
 
       final camera = cameraOf(tester);
       // Heading ~90 (east) -> map rotation is -heading so east points up.
@@ -81,7 +92,7 @@ void main() {
         _point(33.3000, 44.3012, 15, 10),
       ];
       await tester.pumpWidget(harness(riding, true));
-      await tester.pumpAndSettle();
+      await pumpSettled(tester);
       expect(cameraOf(tester).zoom, closeTo(14.0, 0.25));
 
       // Route drawing is untouched: every point still lands in the polyline.
@@ -104,18 +115,18 @@ void main() {
   ) async {
     final points = [_point(33.3000, 44.3000, 0, 0), _point(33.3000, 44.3006, 0, 5)];
     await tester.pumpWidget(harness(points, true));
-    await tester.pumpAndSettle();
+    await pumpSettled(tester);
 
     expect(find.byIcon(Icons.my_location), findsNothing);
 
     await tester.drag(find.byType(FlutterMap), const Offset(-120, -80));
-    await tester.pumpAndSettle();
+    await pumpSettled(tester);
 
     // A recenter button appears once the user has taken over the camera.
     expect(find.byIcon(Icons.my_location), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.my_location));
-    await tester.pumpAndSettle();
+    await pumpSettled(tester);
 
     expect(find.byIcon(Icons.my_location), findsNothing);
   });
