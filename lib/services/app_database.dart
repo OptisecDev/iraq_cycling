@@ -11,7 +11,7 @@ import 'package:sqflite/sqflite.dart';
 /// [openAppDatabase] from the same isolate return the same live connection,
 /// so this is safe to call from multiple repositories.
 const String appDbName = 'iraq_cycling.db';
-const int appDbVersion = 4;
+const int appDbVersion = 5;
 
 /// [overridePath], if provided, is opened directly instead of resolving a
 /// path via `getDatabasesPath()` — only tests need this, to point at an
@@ -28,6 +28,7 @@ Future<Database> openAppDatabase({String? overridePath}) async {
       await _createRideTables(db);
       await _createUserProfileTable(db);
       await _createTrafficHazardsTable(db);
+      await _createRoutingGraphTables(db);
     },
     onUpgrade: (db, oldVersion, newVersion) async {
       if (oldVersion < 2) {
@@ -44,6 +45,9 @@ Future<Database> openAppDatabase({String? overridePath}) async {
         await db.execute(
           "ALTER TABLE user_profile ADD COLUMN gender TEXT NOT NULL DEFAULT 'male'",
         );
+      }
+      if (oldVersion < 5) {
+        await _createRoutingGraphTables(db);
       }
     },
   );
@@ -107,4 +111,62 @@ Future<void> _createTrafficHazardsTable(Database db) async {
       message TEXT NOT NULL
     )
   ''');
+}
+
+/// Offline bike-routing graph for the Baghdad region (see [BaghdadRegion]
+/// in map_tile_service.dart for the exact lat/lon bounds this is scoped to).
+///
+/// This is schema only — nothing populates these tables yet. The intended
+/// source is an OSM extract clipped to the Baghdad bounds, converted into
+/// this nodes/edges shape by an offline pipeline; see the "خط أنابيب بيانات
+/// التوجيه (OSM -> nodes/edges)" section in PROJECT_STATE.md for the full
+/// extraction/conversion steps and the reasoning behind each column below.
+/// No Dijkstra/A* pathfinding reads from these tables yet either.
+///
+/// [routing_nodes.id] is deliberately the source OSM node id itself (not an
+/// autoincrement surrogate) — `INTEGER PRIMARY KEY` in SQLite accepts an
+/// explicit value on insert, and reusing the OSM id lets a re-import
+/// upsert/replace rows directly without first rebuilding an id mapping.
+///
+/// [routing_edges] rows are directed: an OSM way with `oneway=yes` becomes
+/// one row (way's node order); a way with `oneway=-1` becomes one row
+/// (reversed node order); any other way (untagged or `oneway=no`) becomes
+/// two rows, one per direction. This keeps the schema itself pathfinding-
+/// agnostic — a future A*/Dijkstra implementation just walks rows matching
+/// `from_node_id`, with no oneway branching at query time.
+Future<void> _createRoutingGraphTables(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS routing_nodes (
+      id INTEGER PRIMARY KEY,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL
+    )
+  ''');
+
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS routing_edges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_node_id INTEGER NOT NULL,
+      to_node_id INTEGER NOT NULL,
+      osm_way_id INTEGER NOT NULL,
+      highway_type TEXT NOT NULL,
+      cycleway TEXT,
+      surface TEXT,
+      oneway INTEGER NOT NULL DEFAULT 0,
+      distance_meters REAL NOT NULL,
+      weight REAL NOT NULL,
+      FOREIGN KEY (from_node_id) REFERENCES routing_nodes (id) ON DELETE CASCADE,
+      FOREIGN KEY (to_node_id) REFERENCES routing_nodes (id) ON DELETE CASCADE
+    )
+  ''');
+
+  await db.execute(
+    'CREATE INDEX idx_routing_edges_from_node ON routing_edges (from_node_id)',
+  );
+  await db.execute(
+    'CREATE INDEX idx_routing_edges_to_node ON routing_edges (to_node_id)',
+  );
+  await db.execute(
+    'CREATE INDEX idx_routing_edges_osm_way ON routing_edges (osm_way_id)',
+  );
 }
