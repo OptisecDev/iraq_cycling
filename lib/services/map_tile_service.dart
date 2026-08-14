@@ -50,7 +50,7 @@ class BaghdadRegion {
 ///      server, and remove/replace the bulk pre-download entirely in favour
 ///      of normal on-demand caching. Hitting OSM's own servers at production
 ///      scale can get the app's traffic blocked.
-class MapTileService {
+class MapTileService extends ChangeNotifier {
   /// [cacheDir], if provided, is used immediately instead of resolving one
   /// via `path_provider` in [init] - mainly so tests can inject a temporary
   /// directory without needing a platform channel.
@@ -72,6 +72,35 @@ class MapTileService {
 
   bool get isInitialized => _cacheDir != null;
 
+  // Number of consecutive tile fetches that must fail (no local cache hit
+  // and the network request also failed) before treating the map as
+  // "unusable" and surfacing that to the user. A handful rather than a
+  // single failure avoids flashing the banner for one flaky tile while
+  // most of the visible area loads fine.
+  static const int _consecutiveFailureThreshold = 6;
+  int _consecutiveTileFailures = 0;
+
+  /// True once [_consecutiveFailureThreshold] tile fetches in a row have
+  /// failed to load from either the local cache or the network - in
+  /// practice this means "no internet and nothing pre-downloaded yet".
+  /// [RideMapView] watches this (via [ChangeNotifier]) to show a banner
+  /// instead of silently leaving every tile as a gray placeholder.
+  bool get hasTileFetchFailures =>
+      _consecutiveTileFailures >= _consecutiveFailureThreshold;
+
+  void _recordTileFetchFailure() {
+    _consecutiveTileFailures++;
+    if (_consecutiveTileFailures == _consecutiveFailureThreshold) {
+      notifyListeners();
+    }
+  }
+
+  void _recordTileFetchSuccess() {
+    final wasFailing = hasTileFetchFailures;
+    _consecutiveTileFailures = 0;
+    if (wasFailing) notifyListeners();
+  }
+
   /// Prepares the on-disk cache directory (the "store"). Safe to call more
   /// than once; subsequent calls are no-ops.
   Future<void> init() async {
@@ -92,7 +121,11 @@ class MapTileService {
         'MapTileService.init() must complete before tileProvider is used.',
       );
     }
-    return _OfflineFirstTileProvider(cacheDir: dir, httpClient: _httpClient);
+    return _OfflineFirstTileProvider(
+      cacheDir: dir,
+      httpClient: _httpClient,
+      tileService: this,
+    );
   }
 
   /// Number of tiles that [downloadBaghdadRegion] would need to fetch, for
@@ -191,7 +224,11 @@ class MapTileService {
     }
   }
 
-  void dispose() => _httpClient.close();
+  @override
+  void dispose() {
+    _httpClient.close();
+    super.dispose();
+  }
 }
 
 File _fileFor(Directory dir, _TileXYZ t) =>
@@ -246,13 +283,16 @@ class _OfflineFirstTileProvider extends TileProvider {
   _OfflineFirstTileProvider({
     required this.cacheDir,
     required http.Client httpClient,
+    required MapTileService tileService,
   }) : _httpClient = httpClient,
+       _tileService = tileService,
        // Must be a mutable (non-const) map: TileLayer's constructor calls
        // `headers.putIfAbsent(...)` on it, which throws on a const map.
        super(headers: {'User-Agent': MapTileService._userAgent});
 
   final Directory cacheDir;
   final http.Client _httpClient;
+  final MapTileService _tileService;
 
   @override
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
@@ -267,6 +307,7 @@ class _OfflineFirstTileProvider extends TileProvider {
       cacheFile: file,
       httpClient: _httpClient,
       headers: headers,
+      tileService: _tileService,
     );
   }
 }
@@ -277,12 +318,14 @@ class _CachingNetworkTileImage extends ImageProvider<_CachingNetworkTileImage> {
     required this.cacheFile,
     required this.httpClient,
     required this.headers,
+    required this.tileService,
   });
 
   final String url;
   final File cacheFile;
   final http.Client httpClient;
   final Map<String, String> headers;
+  final MapTileService tileService;
 
   @override
   Future<_CachingNetworkTileImage> obtainKey(
@@ -312,10 +355,12 @@ class _CachingNetworkTileImage extends ImageProvider<_CachingNetworkTileImage> {
 
       final bytes = response.bodyBytes;
       unawaited(_writeToCache(bytes));
+      tileService._recordTileFetchSuccess();
       return decode(await ui.ImmutableBuffer.fromUint8List(bytes));
     } catch (_) {
       // Offline and not cached: show a neutral placeholder instead of an
       // error tile or a crash.
+      tileService._recordTileFetchFailure();
       return decode(
         await ui.ImmutableBuffer.fromUint8List(placeholderTileBytes),
       );
