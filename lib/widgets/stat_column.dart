@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
-/// A labelled stat value (e.g. distance, duration), shared between the live
-/// tracking screen and the past-ride detail screen so both present ride
-/// statistics identically.
+/// A labelled stat value (e.g. distance, duration), shared across the live
+/// tracking screen (including its floating map HUD), the past-ride detail
+/// screen, and the profile screen's lifetime stats, so they all present
+/// stats identically.
 class StatColumn extends StatelessWidget {
   const StatColumn({super.key, required this.label, required this.value});
 
