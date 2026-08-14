@@ -1,7 +1,7 @@
-/// TODO(user-profile): weight/age below are hardcoded placeholders because
-/// the app has no user profile/settings screen yet (a future phase). Every
-/// ride calculated in this phase silently assumes a 70kg, 30-year-old rider
-/// unless real values are supplied — flagged here, not hidden.
+/// Fallback weight/age used when no rider profile has been saved yet (see
+/// [UserProfileRepository]/[ProfileScreen]) — a ride calculated before that
+/// silently assumes a 70kg, 30-year-old rider unless real values are
+/// supplied, via [resolveWeightKg]/[resolveAgeYears] below.
 const double placeholderWeightKg = 70.0;
 const int placeholderAgeYears = 30;
 
