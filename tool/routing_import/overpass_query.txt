@@ -1,0 +1,8 @@
+[out:json][timeout:300][bbox:33.0,44.1,33.6,44.6];
+(
+  way["highway"];
+  way["cycleway"];
+);
+out body geom;
+>;
+out skel qt;

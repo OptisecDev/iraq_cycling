@@ -8,3 +8,8 @@ build/
 key.properties
 .flutter-plugins
 .flutter-plugins-dependencies
+
+# Build-time routing-graph import tool: raw OSM pull + generated db are
+# large, reproducible outputs, not source - keep the script, not these.
+tool/routing_import/*.json
+tool/routing_import/*.db
