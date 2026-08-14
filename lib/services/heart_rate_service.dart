@@ -59,11 +59,13 @@ class ReactiveBleClient implements BleClient {
 /// standard BLE Heart Rate Service device. Entirely optional to the rest of
 /// the app: nothing here is required for GPS ride tracking to work.
 class HeartRateService extends ChangeNotifier {
-  HeartRateService({BleClient? bleClient}) : _ble = bleClient ?? ReactiveBleClient();
+  HeartRateService({BleClient? bleClient})
+    : _ble = bleClient ?? ReactiveBleClient();
 
   final BleClient _ble;
 
-  HeartRateConnectionState _connectionState = HeartRateConnectionState.disconnected;
+  HeartRateConnectionState _connectionState =
+      HeartRateConnectionState.disconnected;
   HeartRateConnectionState get connectionState => _connectionState;
 
   String? _connectedDeviceId;
@@ -194,7 +196,15 @@ class HeartRateService extends ChangeNotifier {
       case DeviceConnectionState.connected:
         _connectedDeviceId = update.deviceId;
         _connectionState = HeartRateConnectionState.connected;
-        _retriesLeft = 1;
+        // Deliberately not resetting _retriesLeft here. A device that's
+        // already held by another app (e.g. its own vendor app) can flap
+        // connecting -> briefly "connected" -> disconnected repeatedly
+        // during the handshake; refilling the retry budget on every such
+        // flicker made the auto-retry-once policy retry indefinitely
+        // in that case (confirmed via on-device logcat: native connect()
+        // calls continuing well after the UI already reported
+        // "disconnected"). The budget is only set by the user-initiated
+        // connect() entry point now.
         notifyListeners();
         _subscribeToMeasurement(update.deviceId);
       case DeviceConnectionState.disconnected:
@@ -244,6 +254,17 @@ class HeartRateService extends ChangeNotifier {
       _connect(deviceId);
       return;
     }
+
+    // Giving up: cancel the connection stream rather than leaving it
+    // listening. connectToDevice() keeps retrying at the native BLE layer
+    // for as long as its subscription is alive, regardless of what state
+    // it last reported — without this, the app would keep silently
+    // hammering the device with reconnect attempts forever after already
+    // telling the user it gave up (confirmed via on-device logcat: native
+    // connect() calls continued every ~10s long after the UI settled on
+    // "disconnected").
+    _connectionSubscription?.cancel();
+    _connectionSubscription = null;
 
     _connectedDeviceId = null;
     _latestBpm = null;

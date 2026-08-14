@@ -61,9 +61,16 @@ class TrackingScreen extends StatelessWidget {
                   heartRateService.connectionState ==
                   HeartRateConnectionState.connected;
               return IconButton(
-                icon: Icon(
-                  connected ? Icons.favorite : Icons.favorite_border,
-                  color: connected ? Colors.redAccent : null,
+                icon: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: connected ? null : Colors.white24,
+                  ),
+                  child: Icon(
+                    connected ? Icons.favorite : Icons.favorite_border,
+                    color: connected ? Colors.redAccent : Colors.white70,
+                  ),
                 ),
                 tooltip: 'حزام نبض القلب',
                 onPressed: () => Navigator.of(context).push(

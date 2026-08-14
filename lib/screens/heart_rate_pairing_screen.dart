@@ -11,8 +11,7 @@ class HeartRatePairingScreen extends StatefulWidget {
   const HeartRatePairingScreen({super.key});
 
   @override
-  State<HeartRatePairingScreen> createState() =>
-      _HeartRatePairingScreenState();
+  State<HeartRatePairingScreen> createState() => _HeartRatePairingScreenState();
 }
 
 class _HeartRatePairingScreenState extends State<HeartRatePairingScreen> {
@@ -56,7 +55,8 @@ class _HeartRatePairingScreenState extends State<HeartRatePairingScreen> {
       body: Consumer<HeartRateService>(
         builder: (context, service, child) {
           final state = service.connectionState;
-          final isBusy = state == HeartRateConnectionState.scanning ||
+          final isBusy =
+              state == HeartRateConnectionState.scanning ||
               state == HeartRateConnectionState.connecting;
 
           return Column(
@@ -115,7 +115,7 @@ class _HeartRatePairingScreenState extends State<HeartRatePairingScreen> {
                         final device = devices[index];
                         final isConnectedDevice =
                             service.connectedDeviceId == device.id &&
-                                state == HeartRateConnectionState.connected;
+                            state == HeartRateConnectionState.connected;
                         return Card(
                           color: Colors.white10,
                           margin: const EdgeInsets.only(bottom: 12),
