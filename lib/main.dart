@@ -3,10 +3,13 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/tracking_screen.dart';
+import 'services/hazard_repository.dart';
 import 'services/heart_rate_service.dart';
 import 'services/map_tile_service.dart';
 import 'services/ride_repository.dart';
 import 'services/ride_tracker.dart';
+import 'services/user_profile_repository.dart';
+import 'services/voice_alert_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,8 +19,20 @@ void main() async {
 
   final heartRateService = HeartRateService();
 
+  final userProfileRepository = UserProfileRepository();
+  await userProfileRepository.load();
+
+  final hazardRepository = HazardRepository();
+  final voiceAlertService = VoiceAlertService();
+
   runApp(
-    MyApp(mapTileService: mapTileService, heartRateService: heartRateService),
+    MyApp(
+      mapTileService: mapTileService,
+      heartRateService: heartRateService,
+      userProfileRepository: userProfileRepository,
+      hazardRepository: hazardRepository,
+      voiceAlertService: voiceAlertService,
+    ),
   );
 }
 
@@ -26,10 +41,16 @@ class MyApp extends StatelessWidget {
     super.key,
     required this.mapTileService,
     required this.heartRateService,
+    required this.userProfileRepository,
+    required this.hazardRepository,
+    required this.voiceAlertService,
   });
 
   final MapTileService mapTileService;
   final HeartRateService heartRateService;
+  final UserProfileRepository userProfileRepository;
+  final HazardRepository hazardRepository;
+  final VoiceAlertService voiceAlertService;
 
   @override
   Widget build(BuildContext context) {
@@ -37,10 +58,17 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider<HeartRateService>.value(value: heartRateService),
         ChangeNotifierProvider<RideTracker>(
-          create: (_) => RideTracker(heartRateService: heartRateService),
+          create: (_) => RideTracker(
+            heartRateService: heartRateService,
+            userProfileRepository: userProfileRepository,
+            hazardRepository: hazardRepository,
+            voiceAlertService: voiceAlertService,
+          ),
         ),
         Provider<RideRepository>(create: (_) => RideRepository()),
-        Provider<MapTileService>.value(value: mapTileService),
+        ChangeNotifierProvider<MapTileService>.value(value: mapTileService),
+        Provider<UserProfileRepository>.value(value: userProfileRepository),
+        Provider<HazardRepository>.value(value: hazardRepository),
       ],
       child: MaterialApp(
         title: 'ركوب الدراجات في العراق',

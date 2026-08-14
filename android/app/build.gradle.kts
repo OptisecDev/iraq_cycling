@@ -24,7 +24,10 @@ android {
         applicationId = "com.optisec.iraq_cycling"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Raised from Flutter's default (21) to 24: flutter_tts (Phase 3)
+        // requires minSdk 24. All other plugins in this project require 21
+        // or lower, so this is a safe, compatible bump.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
