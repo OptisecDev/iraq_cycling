@@ -3,11 +3,13 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/tracking_screen.dart';
+import 'services/app_database.dart';
 import 'services/hazard_repository.dart';
 import 'services/heart_rate_service.dart';
 import 'services/map_tile_service.dart';
 import 'services/ride_repository.dart';
 import 'services/ride_tracker.dart';
+import 'services/routing_graph_seeder.dart';
 import 'services/user_profile_repository.dart';
 import 'services/voice_alert_service.dart';
 
@@ -16,6 +18,9 @@ void main() async {
 
   final mapTileService = MapTileService();
   await mapTileService.init();
+
+  final appDatabase = await openAppDatabase();
+  await RoutingGraphSeeder().seedIfNeeded(appDatabase);
 
   final heartRateService = HeartRateService();
 
