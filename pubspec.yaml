@@ -46,6 +46,7 @@ dependencies:
   flutter_reactive_ble: ^5.4.0
   permission_handler: ^11.3.1
   flutter_tts: ^4.2.5
+  collection: ^1.19.0
 
 dev_dependencies:
   flutter_test:

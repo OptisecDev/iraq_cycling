@@ -4,7 +4,9 @@ import 'package:latlong2/latlong.dart' hide DistanceCalculator;
 import 'package:provider/provider.dart';
 
 import '../models/ride_point.dart';
+import '../services/location_service.dart';
 import '../services/map_tile_service.dart';
+import '../services/route_finder.dart';
 import '../utils/distance_calculator.dart';
 import '../widgets/stat_column.dart';
 import 'download_map_screen.dart';
@@ -42,6 +44,13 @@ const _minHeadingDistanceMeters = 3.0;
 /// fighting their gesture. While live and following, the camera also turns
 /// to match the rider's heading, tilts into a 3D perspective, and zooms
 /// dynamically with speed, the same way Waze's active-navigation view does.
+///
+/// A visible "plan route" button also arms destination-picking mode; the
+/// next tap on the map then plans a [RouteFinder] route from the current
+/// position (the live ride position if one is being recorded, otherwise a
+/// one-shot GPS fix) to the tapped point, drawn as a dashed polyline
+/// separate from the ride's own solid recorded-route polyline above. This
+/// is route *planning* only - it never affects ride recording.
 class RideMapView extends StatefulWidget {
   const RideMapView({
     super.key,
@@ -71,8 +80,91 @@ class RideMapView extends StatefulWidget {
 
 class _RideMapViewState extends State<RideMapView> {
   final MapController _mapController = MapController();
+  final LocationService _locationService = LocationService();
   bool _followEnabled = true;
   double _heading = 0;
+
+  // Route-planning state, independent of the ride's own recorded route
+  // above. Triggered by the "plan route" button, not a hidden gesture: the
+  // button arms [_pickingDestination], and the *next* tap on the map (while
+  // armed) supplies the destination.
+  bool _pickingDestination = false;
+  LatLng? _destination;
+  RouteResult? _plannedRoute;
+  bool _isRouting = false;
+  String? _routeError;
+
+  /// Starts (or restarts) a route search to [destination] from the best
+  /// available current position - the ride's live position if one is being
+  /// recorded, otherwise a one-shot GPS fix.
+  Future<void> _planRouteTo(LatLng destination) async {
+    setState(() {
+      _pickingDestination = false;
+      _destination = destination;
+      _plannedRoute = null;
+      _routeError = null;
+      _isRouting = true;
+    });
+
+    final start = await _resolveStartPoint();
+    if (!mounted) return;
+    if (start == null) {
+      setState(() {
+        _isRouting = false;
+        _routeError = 'تعذر تحديد موقعك الحالي';
+      });
+      return;
+    }
+
+    final routeFinder = context.read<RouteFinder>();
+    RouteResult? result;
+    String? error;
+    try {
+      result = await routeFinder.findRoute(
+        startLatitude: start.latitude,
+        startLongitude: start.longitude,
+        endLatitude: destination.latitude,
+        endLongitude: destination.longitude,
+      );
+      if (result == null) error = 'لا يوجد مسار متاح لهذه الوجهة';
+    } catch (_) {
+      error = 'تعذر حساب المسار';
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isRouting = false;
+      _plannedRoute = result;
+      _routeError = error;
+    });
+  }
+
+  Future<LatLng?> _resolveStartPoint() async {
+    if (widget.points.isNotEmpty) {
+      final last = widget.points.last;
+      return LatLng(last.latitude, last.longitude);
+    }
+    try {
+      if (!await _locationService.ensurePermissionsGranted()) return null;
+      final position = await _locationService.getCurrentPosition();
+      return LatLng(position.latitude, position.longitude);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _clearRoute() {
+    setState(() {
+      _destination = null;
+      _plannedRoute = null;
+      _routeError = null;
+      _isRouting = false;
+    });
+  }
+
+  void _togglePickingDestination() {
+    setState(() => _pickingDestination = !_pickingDestination);
+  }
 
   @override
   void didUpdateWidget(covariant RideMapView oldWidget) {
@@ -167,6 +259,9 @@ class _RideMapViewState extends State<RideMapView> {
             setState(() => _followEnabled = false);
           }
         },
+        onTap: (tapPosition, point) {
+          if (_pickingDestination) _planRouteTo(point);
+        },
       ),
       children: [
         TileLayer(
@@ -184,21 +279,45 @@ class _RideMapViewState extends State<RideMapView> {
               ),
             ],
           ),
-        if (current != null)
+        if (_plannedRoute != null && _plannedRoute!.points.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _plannedRoute!.points,
+                color: Colors.lightBlueAccent,
+                strokeWidth: 4,
+                pattern: StrokePattern.dashed(segments: [12, 8]),
+              ),
+            ],
+          ),
+        if (current != null || _destination != null)
           MarkerLayer(
             markers: [
-              Marker(
-                point: current,
-                width: 22,
-                height: 22,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.blueAccent,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
+              if (current != null)
+                Marker(
+                  point: current,
+                  width: 22,
+                  height: 22,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.blueAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
                   ),
                 ),
-              ),
+              if (_destination != null)
+                Marker(
+                  point: _destination!,
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.topCenter,
+                  child: const Icon(
+                    Icons.location_on,
+                    color: Colors.redAccent,
+                    size: 32,
+                  ),
+                ),
             ],
           ),
       ],
@@ -249,6 +368,78 @@ class _RideMapViewState extends State<RideMapView> {
               ),
             ),
           ),
+        if (_pickingDestination)
+          Positioned(
+            top: tileService.hasTileFetchFailures ? 56 : 8,
+            left: 12,
+            right: 12,
+            child: Material(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.touch_app, color: Colors.amberAccent, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'اضغط على الخريطة لتحديد الوجهة',
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        if (_destination != null)
+          Positioned(
+            top: tileService.hasTileFetchFailures ? 56 : 8,
+            left: 12,
+            right: 12,
+            child: Material(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.alt_route,
+                      color: Colors.lightBlueAccent,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _isRouting
+                            ? 'جارٍ حساب المسار...'
+                            : _routeError ??
+                                  'المسافة: ${(_plannedRoute!.distanceMeters / 1000).toStringAsFixed(2)} كم',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.close,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                      tooltip: 'إلغاء المسار',
+                      onPressed: _clearRoute,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         if (widget.isLive && !_followEnabled)
           Positioned(
             right: 12,
@@ -257,6 +448,26 @@ class _RideMapViewState extends State<RideMapView> {
               heroTag: 'recenter',
               onPressed: _recenter,
               child: const Icon(Icons.my_location),
+            ),
+          ),
+        // Stacked above the recenter FAB (when both are visible) rather
+        // than sharing its slot.
+        if (_destination == null)
+          Positioned(
+            right: 12,
+            bottom: (widget.isLive && !_followEnabled) ? 68 : 12,
+            child: FloatingActionButton.small(
+              heroTag: 'planRoute',
+              backgroundColor: _pickingDestination
+                  ? Colors.redAccent
+                  : null,
+              tooltip: _pickingDestination
+                  ? 'إلغاء تحديد الوجهة'
+                  : 'خطط مساراً',
+              onPressed: _togglePickingDestination,
+              child: Icon(
+                _pickingDestination ? Icons.close : Icons.alt_route,
+              ),
             ),
           ),
         // Bottom-left: clear of the top tile-failure banner and the

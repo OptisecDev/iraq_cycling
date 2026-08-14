@@ -5,11 +5,16 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:iraq_cycling/models/ride_point.dart';
 import 'package:iraq_cycling/screens/ride_map_view.dart';
+import 'package:iraq_cycling/services/app_database.dart';
 import 'package:iraq_cycling/services/map_tile_service.dart';
+import 'package:iraq_cycling/services/route_finder.dart';
 
 RidePoint _point(
   double latitude,
@@ -26,6 +31,11 @@ RidePoint _point(
 );
 
 void main() {
+  setUpAll(() {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  });
+
   late Directory tempDir;
   late MapTileService mapTileService;
 
@@ -41,9 +51,19 @@ void main() {
 
   tearDown(() => tempDir.deleteSync(recursive: true));
 
-  Widget harness(List<RidePoint> points, bool isLive) => MaterialApp(
-    home: ChangeNotifierProvider<MapTileService>.value(
-      value: mapTileService,
+  // [routeFinder] defaults to one pointed at nothing in particular - none of
+  // the existing camera/gesture tests below ever trigger a route search, so
+  // its lazily-opened db connection is simply never touched.
+  Widget harness(
+    List<RidePoint> points,
+    bool isLive, {
+    RouteFinder? routeFinder,
+  }) => MaterialApp(
+    home: MultiProvider(
+      providers: [
+        ChangeNotifierProvider<MapTileService>.value(value: mapTileService),
+        Provider<RouteFinder>.value(value: routeFinder ?? RouteFinder()),
+      ],
       child: Scaffold(body: RideMapView(points: points, isLive: isLive)),
     ),
   );
@@ -130,4 +150,99 @@ void main() {
 
     expect(find.byIcon(Icons.my_location), findsNothing);
   });
+
+  testWidgets(
+    'plan-route button arms destination-picking, then a map tap plans and '
+    'draws the route',
+    (tester) async {
+      // A tiny two-node graph: node 1 sits at the rider's current position
+      // (so route planning uses the live point, no GPS fix needed), node 2
+      // is the tapped destination.
+      // sqflite_common_ffi's async db work is real platform/isolate I/O,
+      // which never completes against flutter_test's fake clock - it has to
+      // run inside tester.runAsync() to actually resolve.
+      final dbPath = p.join(tempDir.path, 'routing.db');
+      await tester.runAsync(() async {
+        final seedDb = await openAppDatabase(overridePath: dbPath);
+        await seedDb.insert('routing_nodes', {
+          'id': 1,
+          'latitude': 33.3000,
+          'longitude': 44.3000,
+        });
+        await seedDb.insert('routing_nodes', {
+          'id': 2,
+          'latitude': 33.3010,
+          'longitude': 44.3010,
+        });
+        await seedDb.insert('routing_edges', {
+          'from_node_id': 1,
+          'to_node_id': 2,
+          'osm_way_id': 1,
+          'highway_type': 'residential',
+          'oneway': 1,
+          'distance_meters': 1300.0,
+          'weight': 1300.0,
+        });
+      });
+
+      final points = [_point(33.3000, 44.3000, 0, 0)];
+      await tester.pumpWidget(
+        harness(
+          points,
+          false,
+          routeFinder: RouteFinder(databasePath: dbPath),
+        ),
+      );
+      await pumpSettled(tester);
+
+      // No destination yet, so the plan-route button is showing (and the
+      // map ignores taps until it's pressed).
+      expect(find.byIcon(Icons.alt_route), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.alt_route));
+      await pumpSettled(tester);
+
+      // Armed: the button flips to a cancel affordance and a hint banner
+      // appears.
+      expect(find.byIcon(Icons.close), findsOneWidget);
+      expect(find.text('اضغط على الخريطة لتحديد الوجهة'), findsOneWidget);
+
+      // Grab the live onTap callback straight off the built FlutterMap
+      // instead of driving a real touch gesture - screen-pixel -> geo-point
+      // conversion isn't what this test is checking; the wiring is.
+      final options = tester.widget<FlutterMap>(find.byType(FlutterMap)).options;
+      await tester.runAsync(() async {
+        options.onTap!(
+          const TapPosition(Offset.zero, Offset.zero),
+          const LatLng(33.3010, 44.3010),
+        );
+        // Give the detached _planRouteTo() Future real time to run its
+        // sqlite queries to completion before handing back to fake-async
+        // pumping below.
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      await pumpSettled(tester);
+
+      expect(find.byIcon(Icons.location_on), findsOneWidget);
+      expect(find.textContaining('1.30 كم'), findsOneWidget);
+      // Only the planned route renders as a polyline - the ride's own
+      // recorded route needs >= 2 points, and this ride has only one.
+      final plannedPolyline = tester
+          .widget<PolylineLayer>(find.byType(PolylineLayer))
+          .polylines
+          .single;
+      expect(plannedPolyline.points, [
+        const LatLng(33.3000, 44.3000),
+        const LatLng(33.3010, 44.3010),
+      ]);
+
+      await tester.tap(find.byIcon(Icons.close));
+      await pumpSettled(tester);
+
+      expect(find.byIcon(Icons.location_on), findsNothing);
+      expect(find.byType(PolylineLayer), findsNothing);
+      // The plan-route button is back, ready to start over.
+      expect(find.byIcon(Icons.alt_route), findsOneWidget);
+    },
+  );
 }
