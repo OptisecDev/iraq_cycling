@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide DistanceCalculator;
@@ -6,10 +8,15 @@ import 'package:provider/provider.dart';
 import '../models/ride_point.dart';
 import '../services/location_service.dart';
 import '../services/map_tile_service.dart';
+import '../services/place_search_service.dart';
 import '../services/route_finder.dart';
 import '../utils/distance_calculator.dart';
 import '../widgets/stat_column.dart';
 import 'download_map_screen.dart';
+
+/// Debounce delay between the user typing in the destination search box and
+/// actually querying [PlaceSearchService] - avoids a query per keystroke.
+const _searchDebounceDelay = Duration(milliseconds: 250);
 
 /// Baghdad's approximate center, used before any GPS fix is available.
 const _defaultCenter = LatLng(33.3128, 44.3615);
@@ -45,10 +52,12 @@ const _minHeadingDistanceMeters = 3.0;
 /// to match the rider's heading, tilts into a 3D perspective, and zooms
 /// dynamically with speed, the same way Waze's active-navigation view does.
 ///
-/// A visible "plan route" button also arms destination-picking mode; the
-/// next tap on the map then plans a [RouteFinder] route from the current
-/// position (the live ride position if one is being recorded, otherwise a
-/// one-shot GPS fix) to the tapped point, drawn as a dashed polyline
+/// A visible "plan route" button arms destination-picking mode, which shows
+/// a search box (backed by [PlaceSearchService], an offline name index over
+/// Baghdad's streets/squares) alongside the option to just tap the map
+/// directly. Either way of picking a destination plans a [RouteFinder]
+/// route from the current position (the live ride position if one is being
+/// recorded, otherwise a one-shot GPS fix), drawn as a dashed polyline
 /// separate from the ride's own solid recorded-route polyline above. This
 /// is route *planning* only - it never affects ride recording.
 class RideMapView extends StatefulWidget {
@@ -93,6 +102,12 @@ class _RideMapViewState extends State<RideMapView> {
   RouteResult? _plannedRoute;
   bool _isRouting = false;
   String? _routeError;
+
+  // Destination search, shown alongside the map-tap option while
+  // [_pickingDestination] is armed.
+  final TextEditingController _searchController = TextEditingController();
+  List<PlaceSearchResult> _searchResults = const [];
+  Timer? _searchDebounce;
 
   /// Starts (or restarts) a route search to [destination] from the best
   /// available current position - the ride's live position if one is being
@@ -163,7 +178,38 @@ class _RideMapViewState extends State<RideMapView> {
   }
 
   void _togglePickingDestination() {
-    setState(() => _pickingDestination = !_pickingDestination);
+    setState(() {
+      _pickingDestination = !_pickingDestination;
+      _searchController.clear();
+      _searchResults = const [];
+    });
+  }
+
+  void _onSearchChanged(String query) {
+    _searchDebounce?.cancel();
+    if (query.trim().isEmpty) {
+      setState(() => _searchResults = const []);
+      return;
+    }
+    _searchDebounce = Timer(_searchDebounceDelay, () async {
+      final results = await context.read<PlaceSearchService>().search(query);
+      if (!mounted) return;
+      setState(() => _searchResults = results);
+    });
+  }
+
+  void _selectSearchResult(PlaceSearchResult result) {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchResults = const []);
+    _planRouteTo(result.point);
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
@@ -376,20 +422,74 @@ class _RideMapViewState extends State<RideMapView> {
             child: Material(
               color: Colors.black87,
               borderRadius: BorderRadius.circular(8),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.touch_app, color: Colors.amberAccent, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'اضغط على الخريطة لتحديد الوجهة',
-                        style: TextStyle(color: Colors.white, fontSize: 13),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.search,
+                          color: Colors.amberAccent,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _searchController,
+                            onChanged: _onSearchChanged,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              border: InputBorder.none,
+                              hintText:
+                                  'ابحث عن شارع أو ساحة، أو اضغط على الخريطة',
+                              hintStyle: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_searchResults.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        itemCount: _searchResults.length,
+                        itemBuilder: (context, index) {
+                          final result = _searchResults[index];
+                          return ListTile(
+                            dense: true,
+                            leading: const Icon(
+                              Icons.place,
+                              color: Colors.white54,
+                              size: 18,
+                            ),
+                            title: Text(
+                              result.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                              ),
+                            ),
+                            onTap: () => _selectSearchResult(result),
+                          );
+                        },
                       ),
                     ),
-                  ],
-                ),
+                ],
               ),
             ),
           ),

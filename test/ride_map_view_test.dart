@@ -14,7 +14,9 @@ import 'package:iraq_cycling/models/ride_point.dart';
 import 'package:iraq_cycling/screens/ride_map_view.dart';
 import 'package:iraq_cycling/services/app_database.dart';
 import 'package:iraq_cycling/services/map_tile_service.dart';
+import 'package:iraq_cycling/services/place_search_service.dart';
 import 'package:iraq_cycling/services/route_finder.dart';
+import 'package:iraq_cycling/utils/arabic_text.dart';
 
 RidePoint _point(
   double latitude,
@@ -51,18 +53,23 @@ void main() {
 
   tearDown(() => tempDir.deleteSync(recursive: true));
 
-  // [routeFinder] defaults to one pointed at nothing in particular - none of
-  // the existing camera/gesture tests below ever trigger a route search, so
-  // its lazily-opened db connection is simply never touched.
+  // [routeFinder]/[placeSearchService] default to ones pointed at nothing in
+  // particular - none of the existing camera/gesture tests below ever
+  // trigger a route search or a name search, so their lazily-opened db
+  // connections are simply never touched.
   Widget harness(
     List<RidePoint> points,
     bool isLive, {
     RouteFinder? routeFinder,
+    PlaceSearchService? placeSearchService,
   }) => MaterialApp(
     home: MultiProvider(
       providers: [
         ChangeNotifierProvider<MapTileService>.value(value: mapTileService),
         Provider<RouteFinder>.value(value: routeFinder ?? RouteFinder()),
+        Provider<PlaceSearchService>.value(
+          value: placeSearchService ?? PlaceSearchService(),
+        ),
       ],
       child: Scaffold(body: RideMapView(points: points, isLive: isLive)),
     ),
@@ -202,10 +209,10 @@ void main() {
       await tester.tap(find.byIcon(Icons.alt_route));
       await pumpSettled(tester);
 
-      // Armed: the button flips to a cancel affordance and a hint banner
+      // Armed: the button flips to a cancel affordance and the search box
       // appears.
       expect(find.byIcon(Icons.close), findsOneWidget);
-      expect(find.text('اضغط على الخريطة لتحديد الوجهة'), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
 
       // Grab the live onTap callback straight off the built FlutterMap
       // instead of driving a real touch gesture - screen-pixel -> geo-point
@@ -243,6 +250,83 @@ void main() {
       expect(find.byType(PolylineLayer), findsNothing);
       // The plan-route button is back, ready to start over.
       expect(find.byIcon(Icons.alt_route), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'destination search finds a place by name and plans a route to it',
+    (tester) async {
+      final dbPath = p.join(tempDir.path, 'search_routing.db');
+      await tester.runAsync(() async {
+        final seedDb = await openAppDatabase(overridePath: dbPath);
+        await seedDb.insert('routing_nodes', {
+          'id': 1,
+          'latitude': 33.3000,
+          'longitude': 44.3000,
+        });
+        await seedDb.insert('routing_nodes', {
+          'id': 2,
+          'latitude': 33.3010,
+          'longitude': 44.3010,
+        });
+        await seedDb.insert('routing_edges', {
+          'from_node_id': 1,
+          'to_node_id': 2,
+          'osm_way_id': 1,
+          'highway_type': 'residential',
+          'oneway': 1,
+          'distance_meters': 1300.0,
+          'weight': 1300.0,
+        });
+        await seedDb.insert('place_names', {
+          'name': 'شارع الرشيد',
+          'name_normalized': normalizeArabic('شارع الرشيد'),
+          'latitude': 33.3010,
+          'longitude': 44.3010,
+          'osm_way_id': 1,
+        });
+      });
+
+      final points = [_point(33.3000, 44.3000, 0, 0)];
+      await tester.pumpWidget(
+        harness(
+          points,
+          false,
+          routeFinder: RouteFinder(databasePath: dbPath),
+          placeSearchService: PlaceSearchService(databasePath: dbPath),
+        ),
+      );
+      await pumpSettled(tester);
+
+      await tester.tap(find.byIcon(Icons.alt_route));
+      await pumpSettled(tester);
+
+      // Drive the search box's own onChanged callback directly (same
+      // reasoning as grabbing MapOptions.onTap above) inside runAsync, so
+      // both the debounce Timer and the real sqlite FFI query behind it
+      // actually get to complete.
+      final onChanged = tester
+          .widget<TextField>(find.byType(TextField))
+          .onChanged!;
+      await tester.runAsync(() async {
+        onChanged('رشيد');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      });
+      await pumpSettled(tester);
+
+      expect(find.text('شارع الرشيد'), findsOneWidget);
+
+      final resultTile = tester.widget<ListTile>(
+        find.widgetWithText(ListTile, 'شارع الرشيد'),
+      );
+      await tester.runAsync(() async {
+        resultTile.onTap!();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      await pumpSettled(tester);
+
+      expect(find.byIcon(Icons.location_on), findsOneWidget);
+      expect(find.textContaining('1.30 كم'), findsOneWidget);
     },
   );
 }

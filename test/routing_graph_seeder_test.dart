@@ -37,9 +37,9 @@ void main() {
     tempDir = Directory.systemTemp.createTempSync('routing_graph_seeder_test');
     appDbPath = p.join(tempDir.path, 'app.db');
 
-    // Build a tiny standalone seed db with the same routing_nodes/edges
-    // shape build_routing_graph.py produces, to stand in for the real
-    // (89 MiB) bundled asset.
+    // Build a tiny standalone seed db with the same
+    // routing_nodes/edges/place_names shape build_routing_graph.py
+    // produces, to stand in for the real (~90 MiB) bundled asset.
     final seedDbPath = p.join(tempDir.path, 'seed_source.db');
     final seedDb = await databaseFactory.openDatabase(seedDbPath);
     await seedDb.execute(
@@ -57,6 +57,16 @@ void main() {
         oneway INTEGER NOT NULL DEFAULT 0,
         distance_meters REAL NOT NULL,
         weight REAL NOT NULL
+      )
+    ''');
+    await seedDb.execute('''
+      CREATE TABLE place_names (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        name_normalized TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        osm_way_id INTEGER NOT NULL
       )
     ''');
     await seedDb.insert('routing_nodes', {
@@ -78,6 +88,13 @@ void main() {
       'distance_meters': 42.0,
       'weight': 42.0,
     });
+    await seedDb.insert('place_names', {
+      'name': 'شارع تجريبي',
+      'name_normalized': 'شارع تجريبي',
+      'latitude': 33.3,
+      'longitude': 44.4,
+      'osm_way_id': 999,
+    });
     await seedDb.close();
 
     seedDbBytes = await File(seedDbPath).readAsBytes();
@@ -87,7 +104,7 @@ void main() {
     tempDir.deleteSync(recursive: true);
   });
 
-  test('seedIfNeeded copies nodes and edges from the asset into an empty db', () async {
+  test('seedIfNeeded copies nodes, edges and place names from the asset into an empty db', () async {
     final appDb = await openAppDatabase(overridePath: appDbPath);
     final bundle = _FakeAssetBundle(seedDbBytes);
 
@@ -98,15 +115,18 @@ void main() {
 
     final nodes = await appDb.query('routing_nodes', orderBy: 'id');
     final edges = await appDb.query('routing_edges');
+    final places = await appDb.query('place_names');
 
     expect(nodes, hasLength(2));
     expect(nodes.first['id'], 1);
     expect(edges, hasLength(1));
     expect(edges.first['osm_way_id'], 999);
+    expect(places, hasLength(1));
+    expect(places.first['name'], 'شارع تجريبي');
     expect(bundle.loadCount, 1);
   });
 
-  test('seedIfNeeded is a no-op once both tables are already populated', () async {
+  test('seedIfNeeded is a no-op once all tables are already populated', () async {
     final appDb = await openAppDatabase(overridePath: appDbPath);
     final bundle = _FakeAssetBundle(seedDbBytes);
     final seeder = RoutingGraphSeeder(assetBundle: bundle, tempDir: tempDir);
@@ -120,7 +140,7 @@ void main() {
   test('seedIfNeeded self-heals a partial previous seed', () async {
     final appDb = await openAppDatabase(overridePath: appDbPath);
     // Simulate a run that was interrupted after routing_nodes but before
-    // routing_edges.
+    // routing_edges/place_names.
     await appDb.insert('routing_nodes', {
       'id': 999999,
       'latitude': 0,
@@ -136,5 +156,35 @@ void main() {
     final nodes = await appDb.query('routing_nodes', orderBy: 'id');
     expect(nodes.map((n) => n['id']), [1, 2]);
     expect(await appDb.query('routing_edges'), hasLength(1));
+    expect(await appDb.query('place_names'), hasLength(1));
+  });
+
+  test('seedIfNeeded self-heals when only place_names is missing', () async {
+    final appDb = await openAppDatabase(overridePath: appDbPath);
+    // Simulate a run that populated routing_nodes/routing_edges (an
+    // appDbVersion 5 install, before place_names existed) but never got a
+    // chance to backfill place_names.
+    await appDb.insert('routing_nodes', {
+      'id': 1,
+      'latitude': 33.3,
+      'longitude': 44.4,
+    });
+    await appDb.insert('routing_edges', {
+      'from_node_id': 1,
+      'to_node_id': 1,
+      'osm_way_id': 1,
+      'highway_type': 'residential',
+      'oneway': 0,
+      'distance_meters': 1.0,
+      'weight': 1.0,
+    });
+
+    final bundle = _FakeAssetBundle(seedDbBytes);
+    await RoutingGraphSeeder(
+      assetBundle: bundle,
+      tempDir: tempDir,
+    ).seedIfNeeded(appDb);
+
+    expect(await appDb.query('place_names'), hasLength(1));
   });
 }

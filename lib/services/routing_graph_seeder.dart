@@ -7,13 +7,15 @@ import 'package:sqflite/sqflite.dart';
 
 /// One-time data seed for the offline bike-routing graph (`routing_nodes`/
 /// `routing_edges`, see `_createRoutingGraphTables` in `app_database.dart`)
+/// and the name-search index (`place_names`, see `_createPlaceNamesTable`)
 /// from a prebuilt sqlite db shipped as a Flutter asset.
 ///
 /// The asset itself is produced entirely outside the app by
 /// `tool/routing_import/build_routing_graph.py` (an offline, build-time
-/// OSM -> nodes/edges pipeline, documented in PROJECT_STATE.md). Nothing in
-/// this class talks to Overpass/OSM or computes any routing-graph data - it
-/// only copies already-computed rows into the app's live database.
+/// OSM -> nodes/edges/place_names pipeline, documented in
+/// PROJECT_STATE.md). Nothing in this class talks to Overpass/OSM or
+/// computes any routing-graph/place-name data - it only copies
+/// already-computed rows into the app's live database.
 class RoutingGraphSeeder {
   /// [assetBundle] and [tempDir], if provided, are used instead of the real
   /// `rootBundle`/`path_provider` - so tests can inject a fake bundle and a
@@ -27,15 +29,16 @@ class RoutingGraphSeeder {
   final AssetBundle _assetBundle;
   final Directory? _tempDir;
 
-  /// Copies `routing_nodes`/`routing_edges` from the bundled asset into
-  /// [db] unless both tables are already populated. Safe to call on every
-  /// app start - a cheap no-op after the first successful run, and also
-  /// self-heals a previous run that was interrupted mid-seed (one table
-  /// populated, the other not).
+  /// Copies `routing_nodes`/`routing_edges`/`place_names` from the bundled
+  /// asset into [db] unless all three tables are already populated. Safe to
+  /// call on every app start - a cheap no-op after the first successful
+  /// run, and also self-heals a previous run that was interrupted mid-seed
+  /// (some tables populated, others not).
   Future<void> seedIfNeeded(Database db) async {
     final nodeCount = await _rowCount(db, 'routing_nodes');
     final edgeCount = await _rowCount(db, 'routing_edges');
-    if (nodeCount > 0 && edgeCount > 0) return;
+    final placeCount = await _rowCount(db, 'place_names');
+    if (nodeCount > 0 && edgeCount > 0 && placeCount > 0) return;
 
     final assetData = await _assetBundle.load(assetPath);
     final tempDir = _tempDir ?? await getTemporaryDirectory();
@@ -62,8 +65,11 @@ class RoutingGraphSeeder {
           // Matches the re-import policy documented in PROJECT_STATE.md:
           // full delete then reinsert from scratch - routing_edges first
           // (FK to routing_nodes), routing_nodes first on the way back in.
+          // place_names has no FK to either, so its own order doesn't
+          // matter relative to them.
           await txn.execute('DELETE FROM routing_edges');
           await txn.execute('DELETE FROM routing_nodes');
+          await txn.execute('DELETE FROM place_names');
           await txn.execute(
             'INSERT INTO routing_nodes SELECT id, latitude, longitude '
             'FROM seed.routing_nodes',
@@ -75,6 +81,12 @@ class RoutingGraphSeeder {
             SELECT from_node_id, to_node_id, osm_way_id, highway_type,
                    cycleway, surface, oneway, distance_meters, weight
             FROM seed.routing_edges
+          ''');
+          await txn.execute('''
+            INSERT INTO place_names
+              (name, name_normalized, latitude, longitude, osm_way_id)
+            SELECT name, name_normalized, latitude, longitude, osm_way_id
+            FROM seed.place_names
           ''');
         });
       } finally {

@@ -11,7 +11,7 @@ import 'package:sqflite/sqflite.dart';
 /// [openAppDatabase] from the same isolate return the same live connection,
 /// so this is safe to call from multiple repositories.
 const String appDbName = 'iraq_cycling.db';
-const int appDbVersion = 5;
+const int appDbVersion = 6;
 
 /// [overridePath], if provided, is opened directly instead of resolving a
 /// path via `getDatabasesPath()` — only tests need this, to point at an
@@ -29,6 +29,7 @@ Future<Database> openAppDatabase({String? overridePath}) async {
       await _createUserProfileTable(db);
       await _createTrafficHazardsTable(db);
       await _createRoutingGraphTables(db);
+      await _createPlaceNamesTable(db);
     },
     onUpgrade: (db, oldVersion, newVersion) async {
       if (oldVersion < 2) {
@@ -48,6 +49,9 @@ Future<Database> openAppDatabase({String? overridePath}) async {
       }
       if (oldVersion < 5) {
         await _createRoutingGraphTables(db);
+      }
+      if (oldVersion < 6) {
+        await _createPlaceNamesTable(db);
       }
     },
   );
@@ -116,12 +120,12 @@ Future<void> _createTrafficHazardsTable(Database db) async {
 /// Offline bike-routing graph for the Baghdad region (see [BaghdadRegion]
 /// in map_tile_service.dart for the exact lat/lon bounds this is scoped to).
 ///
-/// This is schema only — nothing populates these tables yet. The intended
-/// source is an OSM extract clipped to the Baghdad bounds, converted into
-/// this nodes/edges shape by an offline pipeline; see the "خط أنابيب بيانات
-/// التوجيه (OSM -> nodes/edges)" section in PROJECT_STATE.md for the full
-/// extraction/conversion steps and the reasoning behind each column below.
-/// No Dijkstra/A* pathfinding reads from these tables yet either.
+/// Populated by [RoutingGraphSeeder] from an OSM extract clipped to the
+/// Baghdad bounds, converted into this nodes/edges shape by an offline
+/// pipeline; see the "خط أنابيب بيانات التوجيه (OSM -> nodes/edges)"
+/// section in PROJECT_STATE.md for the full extraction/conversion steps and
+/// the reasoning behind each column below. Read by [RouteFinder]'s A*
+/// search.
 ///
 /// [routing_nodes.id] is deliberately the source OSM node id itself (not an
 /// autoincrement surrogate) — `INTEGER PRIMARY KEY` in SQLite accepts an
@@ -168,5 +172,36 @@ Future<void> _createRoutingGraphTables(Database db) async {
   );
   await db.execute(
     'CREATE INDEX idx_routing_edges_osm_way ON routing_edges (osm_way_id)',
+  );
+}
+
+/// Name-search index for [PlaceSearchService]: one row per uniquely-named
+/// street/square from the same OSM extract [_createRoutingGraphTables]
+/// pulls its nodes/edges from - see
+/// `tool/routing_import/build_routing_graph.py`'s `extract_place_names()`
+/// for how rows are produced (dedup by name, longest segment wins as the
+/// representative point) and populated by [RoutingGraphSeeder] alongside
+/// routing_nodes/routing_edges.
+///
+/// [name_normalized] is precomputed at build time via the same
+/// `normalize_arabic_name()` (Python) / `normalizeArabic()` (Dart,
+/// lib/utils/arabic_text.dart) logic, so a search query only needs to be
+/// normalized once at query time and compared directly - no per-row
+/// normalization work at query time.
+Future<void> _createPlaceNamesTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS place_names (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      name_normalized TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      osm_way_id INTEGER NOT NULL
+    )
+  ''');
+
+  await db.execute(
+    'CREATE INDEX IF NOT EXISTS idx_place_names_normalized '
+    'ON place_names (name_normalized)',
   );
 }

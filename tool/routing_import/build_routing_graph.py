@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Build-time tool: OSM (Overpass) -> routing_nodes/routing_edges sqlite db.
+"""Build-time tool: OSM (Overpass) -> routing_nodes/routing_edges/place_names db.
 
 Not on-device logic. Run this during development to produce a prebuilt
 sqlite database matching the routing_nodes/routing_edges schema created in
-lib/services/app_database.dart (_createRoutingGraphTables, appDbVersion 5).
+lib/services/app_database.dart (_createRoutingGraphTables) and the
+place_names schema (_createPlaceNamesTable), appDbVersion 6.
 Ship the output as a build-time asset copied into place on first app run,
 the same way it's documented under "خط أنابيب بيانات التوجيه" in
 PROJECT_STATE.md.
+
+place_names is a name-search index over the *same* already-fetched named
+ways (streets/squares) - no separate Overpass query for POIs/amenities.
+One row per unique name: when a street is split into many OSM way
+segments (common for long streets), the longest segment (by node count
+inside BBOX) is picked as that name's representative point, so search
+results stay one-per-name instead of dozens of near-duplicates.
 
 Usage:
     python3 build_routing_graph.py --fetch -o baghdad_routing.db
@@ -17,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sqlite3
 import sys
 import urllib.parse
@@ -163,8 +172,78 @@ ROUTING_EDGES_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_routing_edges_osm_way ON routing_edges (osm_way_id)",
 ]
 
+PLACE_NAMES_DDL = """
+CREATE TABLE IF NOT EXISTS place_names (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  name_normalized TEXT NOT NULL,
+  latitude REAL NOT NULL,
+  longitude REAL NOT NULL,
+  osm_way_id INTEGER NOT NULL
+)
+"""
 
-def build_database(osm_data: dict, out_path: Path) -> tuple[int, int]:
+PLACE_NAMES_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_place_names_normalized "
+    "ON place_names (name_normalized)"
+)
+
+# Tashkeel/diacritics + tatweel (kashida) - stripped entirely rather than
+# mapped, since they carry no distinguishing meaning for search matching.
+_ARABIC_DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u0640]")
+
+# Alef variants -> bare alef, alef maksura -> yeh, taa marbuta -> haa: the
+# standard normalization for loose Arabic text search, since Baghdad street
+# names are inconsistently tagged across these forms in OSM.
+_ARABIC_CHAR_MAP = str.maketrans(
+    {"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه"}
+)
+
+
+def normalize_arabic_name(name: str) -> str:
+    """Normalizes a place name for loose search matching.
+
+    Mirrors lib/utils/arabic_text.dart's normalizeArabic() exactly - this is
+    what gets indexed here, and that's what a search query gets normalized
+    with at query time, so the two must stay in sync.
+    """
+    text = _ARABIC_DIACRITICS_RE.sub("", name)
+    text = text.translate(_ARABIC_CHAR_MAP)
+    return " ".join(text.split()).strip().lower()
+
+
+def extract_place_names(ways: list[dict]) -> list[tuple[str, str, float, float, int]]:
+    """One (name, name_normalized, latitude, longitude, osm_way_id) row per
+    unique named way, using the longest-inside-BBOX segment as each name's
+    representative point (see module docstring)."""
+    min_lat, min_lon, max_lat, max_lon = BBOX
+    candidates: dict[str, tuple[int, list[dict]]] = {}
+
+    for way in ways:
+        name = way.get("tags", {}).get("name")
+        if not name:
+            continue
+        filtered = [
+            pt
+            for pt in way.get("geometry") or []
+            if pt and min_lat <= pt["lat"] <= max_lat and min_lon <= pt["lon"] <= max_lon
+        ]
+        if not filtered:
+            continue  # way only clips through the edge of BBOX; not a local street
+        existing = candidates.get(name)
+        if existing is None or len(filtered) > len(existing[1]):
+            candidates[name] = (way["id"], filtered)
+
+    rows = []
+    for name, (way_id, filtered) in candidates.items():
+        midpoint = filtered[len(filtered) // 2]
+        rows.append(
+            (name, normalize_arabic_name(name), midpoint["lat"], midpoint["lon"], way_id)
+        )
+    return rows
+
+
+def build_database(osm_data: dict, out_path: Path) -> tuple[int, int, int]:
     elements = osm_data["elements"]
     ways = [e for e in elements if e["type"] == "way"]
     nodes = [e for e in elements if e["type"] == "node"]
@@ -191,6 +270,8 @@ def build_database(osm_data: dict, out_path: Path) -> tuple[int, int]:
     conn.execute(ROUTING_EDGES_DDL)
     for stmt in ROUTING_EDGES_INDEXES:
         conn.execute(stmt)
+    conn.execute(PLACE_NAMES_DDL)
+    conn.execute(PLACE_NAMES_INDEX)
 
     used_node_ids: set[int] = set()
     edge_rows = []
@@ -229,6 +310,7 @@ def build_database(osm_data: dict, out_path: Path) -> tuple[int, int]:
         for nid in used_node_ids
         if nid in node_coords
     ]
+    place_rows = extract_place_names(ways)
 
     with conn:
         conn.executemany(
@@ -244,11 +326,20 @@ def build_database(osm_data: dict, out_path: Path) -> tuple[int, int]:
             """,
             edge_rows,
         )
+        conn.executemany(
+            """
+            INSERT INTO place_names
+              (name, name_normalized, latitude, longitude, osm_way_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            place_rows,
+        )
 
     node_count = conn.execute("SELECT COUNT(*) FROM routing_nodes").fetchone()[0]
     edge_count = conn.execute("SELECT COUNT(*) FROM routing_edges").fetchone()[0]
+    place_count = conn.execute("SELECT COUNT(*) FROM place_names").fetchone()[0]
     conn.close()
-    return node_count, edge_count
+    return node_count, edge_count, place_count
 
 
 def main() -> int:
@@ -274,11 +365,12 @@ def main() -> int:
         parser.error("must pass either --fetch or -i/--input")
         return 2
 
-    node_count, edge_count = build_database(osm_data, args.output)
+    node_count, edge_count, place_count = build_database(osm_data, args.output)
     size_bytes = args.output.stat().st_size
 
     print(f"routing_nodes: {node_count}")
     print(f"routing_edges: {edge_count}")
+    print(f"place_names: {place_count}")
     print(f"output: {args.output} ({size_bytes:,} bytes / {size_bytes / 1024 / 1024:.2f} MiB)")
     return 0
 

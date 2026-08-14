@@ -7,6 +7,7 @@ import 'services/app_database.dart';
 import 'services/hazard_repository.dart';
 import 'services/heart_rate_service.dart';
 import 'services/map_tile_service.dart';
+import 'services/place_search_service.dart';
 import 'services/ride_repository.dart';
 import 'services/ride_tracker.dart';
 import 'services/route_finder.dart';
@@ -76,6 +77,7 @@ class MyApp extends StatelessWidget {
         Provider<UserProfileRepository>.value(value: userProfileRepository),
         Provider<HazardRepository>.value(value: hazardRepository),
         Provider<RouteFinder>(create: (_) => RouteFinder()),
+        Provider<PlaceSearchService>(create: (_) => PlaceSearchService()),
       ],
       child: MaterialApp(
         title: 'ركوب الدراجات في العراق',

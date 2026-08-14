@@ -5,10 +5,10 @@ import 'package:iraq_cycling/services/app_database.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-/// Schema-only coverage for the routing_nodes/routing_edges tables added in
-/// appDbVersion 5. No pathfinding reads/writes these tables yet, so there is
-/// nothing to test beyond "the shape openAppDatabase creates matches what
-/// the OSM-import pipeline documented in PROJECT_STATE.md expects to write".
+/// Schema-only coverage for the routing_nodes/routing_edges tables (added in
+/// appDbVersion 5) and the place_names search index (appDbVersion 6) - "the
+/// shape openAppDatabase creates matches what the OSM-import pipeline
+/// documented in PROJECT_STATE.md expects to write".
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
@@ -114,5 +114,32 @@ void main() {
 
     final remainingEdges = await db.query('routing_edges');
     expect(remainingEdges, isEmpty);
+  });
+
+  test('fresh install creates place_names with the expected columns', () async {
+    final db = await openAppDatabase(overridePath: dbPath);
+
+    final columns = await db.rawQuery('PRAGMA table_info(place_names)');
+    final columnNames = columns.map((c) => c['name']).toSet();
+
+    expect(columnNames, {
+      'id',
+      'name',
+      'name_normalized',
+      'latitude',
+      'longitude',
+      'osm_way_id',
+    });
+  });
+
+  test('place_names has an index on name_normalized', () async {
+    final db = await openAppDatabase(overridePath: dbPath);
+
+    final indexes = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'place_names'",
+    );
+    final indexNames = indexes.map((i) => i['name']).toSet();
+
+    expect(indexNames, {'idx_place_names_normalized'});
   });
 }
