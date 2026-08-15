@@ -7,8 +7,15 @@ plugins {
 
 android {
     namespace = "com.optisec.iraq_cycling"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = "25.1.8937393"
+    // Raised from flutter.compileSdkVersion (35): maplibre_gl and flutter_tts
+    // both require compiling against SDK 36.
+    compileSdk = 36
+    // Raised from 25.1.8937393: maplibre_gl requires NDK 28.1.13356709;
+    // flutter_tts/geolocator_android/path_provider_android/
+    // permission_handler_android/reactive_ble_mobile/sqflite_android all
+    // request 27.0.12077973 or lower, so the highest requirement wins (NDKs
+    // are backward compatible).
+    ndkVersion = "28.1.13356709"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

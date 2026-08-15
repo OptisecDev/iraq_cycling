@@ -4,8 +4,6 @@ import 'package:provider/provider.dart';
 import '../services/heart_rate_service.dart';
 import '../services/ride_repository.dart';
 import '../services/ride_tracker.dart';
-import '../utils/format_utils.dart';
-import '../widgets/stat_column.dart';
 import 'download_map_screen.dart';
 import 'hazard_management_screen.dart';
 import 'heart_rate_pairing_screen.dart';
@@ -46,6 +44,7 @@ class TrackingScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
+        toolbarHeight: 44,
         title: const Text('تتبع الرحلة'),
         actions: [
           IconButton(
@@ -117,104 +116,36 @@ class TrackingScreen extends StatelessWidget {
             final heartRateConnected =
                 heartRateService.connectionState ==
                 HeartRateConnectionState.connected;
-            final bpmValue = heartRateConnected
-                ? (heartRateService.latestBpm?.toString() ?? '--')
-                : 'غير متصل';
 
+            // The map fills nearly the whole screen (elevation/heart-rate/
+            // calorie/speed/distance readouts now live in floating cards
+            // over it - see RideMapView); only the ride controls keep a
+            // fixed-height slot below it.
             return Column(
               children: [
                 Expanded(
-                  flex: 4,
                   child: RideMapView(
                     points: ride?.points ?? const [],
                     isLive: tracker.state == TrackingState.tracking,
                     heartRateBpm: heartRateService.latestBpm,
                     heartRateConnected: heartRateConnected,
                     liveCalories: tracker.liveCalories,
+                    instantSpeedKmh: tracker.instantSpeedKmh,
+                    distanceKm: distanceKm,
+                    avgSpeedKmh: avgSpeedKmh,
+                    elevationGainMeters: elevationGain,
+                    duration: duration,
                   ),
                 ),
-                Expanded(
-                  flex: 6,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
-                    ),
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: Center(
-                            child: SingleChildScrollView(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    tracker.instantSpeedKmh.toStringAsFixed(1),
-                                    style: const TextStyle(
-                                      fontSize: 96,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                      height: 1,
-                                    ),
-                                  ),
-                                  const Text(
-                                    'كم/س',
-                                    style: TextStyle(
-                                      fontSize: 20,
-                                      color: Colors.white70,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 32),
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceEvenly,
-                                    children: [
-                                      StatColumn(
-                                        label: 'المسافة (كم)',
-                                        value: distanceKm.toStringAsFixed(2),
-                                      ),
-                                      StatColumn(
-                                        label: 'الوقت',
-                                        value: formatDuration(duration),
-                                      ),
-                                      StatColumn(
-                                        label: 'المعدل (كم/س)',
-                                        value: avgSpeedKmh.toStringAsFixed(1),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 24),
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceEvenly,
-                                    children: [
-                                      StatColumn(
-                                        label: 'ارتفاع التسلق (م)',
-                                        value: elevationGain.toStringAsFixed(0),
-                                      ),
-                                      StatColumn(
-                                        label: 'نبض القلب',
-                                        value: bpmValue,
-                                      ),
-                                      StatColumn(
-                                        label: 'السعرات الحرارية',
-                                        value: tracker.liveCalories
-                                            .toStringAsFixed(0),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        _ControlButtons(
-                          tracker: tracker,
-                          onStart: () => _handleStart(context, tracker),
-                          onFinish: () => _handleFinish(context, tracker),
-                        ),
-                      ],
-                    ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 16,
+                  ),
+                  child: _ControlButtons(
+                    tracker: tracker,
+                    onStart: () => _handleStart(context, tracker),
+                    onFinish: () => _handleFinish(context, tracker),
                   ),
                 ),
               ],

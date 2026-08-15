@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allows plaintext (cleartext) HTTP to the loopback address only, so
+  maplibre_gl's native tile fetcher can talk to VectorTileHttpServer
+  (lib/services/vector_tile_http_server.dart), a local-only tile/style
+  server the app itself runs on 127.0.0.1. Every other domain still goes
+  through Android's default HTTPS-only network security config.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

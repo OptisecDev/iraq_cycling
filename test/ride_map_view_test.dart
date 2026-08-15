@@ -1,11 +1,10 @@
 import 'dart:io';
+import 'dart:math' show Point;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -38,16 +37,110 @@ void main() {
     databaseFactory = databaseFactoryFfi;
   });
 
+  // maplibre_gl's MapLibreMap renders via a real AndroidView platform view,
+  // which talks to the engine over two channels flutter_test has no
+  // backing implementation for: the shared 'flutter/platform_views'
+  // channel (create/dispose), and a per-instance
+  // 'plugins.flutter.io/maplibre_gl_<id>' channel the plugin opens itself
+  // once the view is "created" (see MapLibreMethodChannel.initPlatform).
+  // Faking both is enough for the widget tree to build and lay out without
+  // throwing - it still never reaches an actual native map, so
+  // onStyleLoadedCallback (and so a real MapLibreMapController) never
+  // fires, same as without this mocking.
+  const platformViewsChannel = MethodChannel('flutter/platform_views');
+  final mockedMapChannels = <MethodChannel>[];
+  setUp(() {
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(platformViewsChannel, (call) async {
+      switch (call.method) {
+        case 'create':
+          final id = call.arguments['id'] as int;
+          final mapChannel = MethodChannel(
+            'plugins.flutter.io/maplibre_gl_$id',
+          );
+          mockedMapChannels.add(mapChannel);
+          TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(mapChannel, (call) async => null);
+          return 0;
+        default:
+          return null;
+      }
+    });
+  });
+  tearDown(() {
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(platformViewsChannel, null);
+    for (final channel in mockedMapChannels) {
+      TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    }
+    mockedMapChannels.clear();
+  });
+
+  // maplibre_gl renders the map itself via a native AndroidView/UiKitView
+  // platform view, which flutter_test cannot actually create -
+  // onMapCreated/onStyleLoadedCallback never fire in a widget test, so a
+  // real MapLibreMapController (and so real camera state or drawn
+  // lines/circles) is never available to assert on here. Two kinds of
+  // coverage replace what the old flutter_map-based tests checked directly
+  // against the map widget:
+  //   - the camera math (headingBetween/dynamicZoomFor, both top-level pure
+  //     functions in ride_map_view.dart) is unit-tested directly below,
+  //     with no widget tree involved at all - arguably better coverage than
+  //     the old approach of pumping a widget and reading MapCamera.of(...).
+  //   - the route-planning/search wiring is still tested end-to-end here,
+  //     grabbing MapLibreMap.onMapClick straight off the built widget the
+  //     same way the old tests grabbed FlutterMap.options.onTap - that part
+  //     is a plain constructor callback, not a platform-view behavior, so
+  //     it works identically to before.
+  //
+  // Two behaviors from the old flutter_map-based test file have no
+  // replacement here, as a direct consequence of the platform-view swap:
+  // a tester.drag()-triggered "manual pan stops following" gesture (there
+  // is no Flutter-side gesture arena for a platform view to test against),
+  // and reading back drawn polylines/circles as widgets (maplibre_gl adds
+  // them imperatively via the controller, which is never created in these
+  // tests). Both need manual on-device verification instead.
+
+  group('headingBetween', () {
+    test('returns the great-circle bearing between two points', () {
+      // Due-east movement (~56m, well past the jitter floor).
+      final previous = _point(33.3000, 44.3000, 0, 0);
+      final last = _point(33.3000, 44.3006, 0, 5);
+      expect(headingBetween(previous, last), closeTo(90, 2));
+    });
+
+    test('returns null when the points are within the jitter floor', () {
+      final previous = _point(33.3000, 44.3000, 0, 0);
+      final last = _point(33.30001, 44.30001, 0, 1);
+      expect(headingBetween(previous, last), isNull);
+    });
+  });
+
+  group('dynamicZoomFor', () {
+    test('zooms all the way in when stopped', () {
+      expect(dynamicZoomFor(0), closeTo(17.0, 0.001));
+    });
+
+    test('pulls back to the far zoom at/above full navigation speed', () {
+      expect(dynamicZoomFor(30 / 3.6), closeTo(14.0, 0.001));
+      expect(dynamicZoomFor(100 / 3.6), closeTo(14.0, 0.001));
+    });
+
+    test('interpolates between the two at partial speed', () {
+      final zoom = dynamicZoomFor(15 / 3.6);
+      expect(zoom, greaterThan(14.0));
+      expect(zoom, lessThan(17.0));
+    });
+  });
+
   late Directory tempDir;
   late MapTileService mapTileService;
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('ride_map_view_test');
-    // Tile requests always fail (no network in the test VM); RideMapView
-    // renders fine regardless, it just eventually shows the offline banner.
-    mapTileService = MapTileService(
-      cacheDir: tempDir,
-      httpClient: MockClient((request) async => http.Response('', 404)),
+    mapTileService = MapTileService.readyForTesting(
+      styleUrl: 'http://127.0.0.1:1/style.json',
     );
   });
 
@@ -75,9 +168,6 @@ void main() {
     ),
   );
 
-  MapCamera cameraOf(WidgetTester tester) =>
-      MapController.of(tester.element(find.byType(TileLayer))).camera;
-
   // The live map's HUD includes a heart icon that pulses on an infinitely
   // repeating AnimationController (see _PulsingHeart in ride_map_view.dart)
   // while isLive is true - pumpAndSettle() never terminates against that
@@ -89,73 +179,24 @@ void main() {
     }
   }
 
-  double tiltMatrixEntry11(WidgetTester tester) => tester
-      .widget<AnimatedContainer>(find.byType(AnimatedContainer))
-      .transform!
-      .entry(1, 1);
-
-  testWidgets(
-    'live+following camera turns to heading, zooms with speed, and tilts',
-    (tester) async {
-      // Due-east movement (~56m, well past the jitter floor) at a stop.
-      final stopped = [_point(33.3000, 44.3000, 0, 0), _point(33.3000, 44.3006, 0, 5)];
-      await tester.pumpWidget(harness([stopped.first], true));
-      await pumpSettled(tester);
-
-      await tester.pumpWidget(harness(stopped, true));
-      await pumpSettled(tester);
-
-      final camera = cameraOf(tester);
-      // Heading ~90 (east) -> map rotation is -heading so east points up.
-      expect(camera.rotation, closeTo(-90, 2));
-      // Near-stopped -> zoomed all the way in.
-      expect(camera.zoom, closeTo(17.0, 0.25));
-      // Tilted: rotateX + scale changes this diagonal entry away from 1.0.
-      expect(tiltMatrixEntry11(tester), isNot(closeTo(1.0, 0.01)));
-
-      // Same heading, now at 54 km/h -> zoom pulls back out toward the far end.
-      final riding = [
-        ...stopped,
-        _point(33.3000, 44.3012, 15, 10),
-      ];
-      await tester.pumpWidget(harness(riding, true));
-      await pumpSettled(tester);
-      expect(cameraOf(tester).zoom, closeTo(14.0, 0.25));
-
-      // Route drawing is untouched: every point still lands in the polyline.
-      final polyline = tester
-          .widget<PolylineLayer>(find.byType(PolylineLayer))
-          .polylines
-          .single;
-      expect(polyline.points, hasLength(riding.length));
-
-      // Ride stops -> camera drops back to flat, north-up.
-      await tester.pumpWidget(harness(riding, false));
-      await tester.pumpAndSettle();
-      expect(cameraOf(tester).rotation, closeTo(0, 0.5));
-      expect(tiltMatrixEntry11(tester), closeTo(1.0, 0.01));
-    },
-  );
-
-  testWidgets('manual pan stops following instead of fighting the gesture', (
+  testWidgets('live map renders the HUD and no recenter button initially', (
     tester,
   ) async {
-    final points = [_point(33.3000, 44.3000, 0, 0), _point(33.3000, 44.3006, 0, 5)];
+    final points = [_point(33.3000, 44.3000, 0, 0)];
     await tester.pumpWidget(harness(points, true));
     await pumpSettled(tester);
 
+    expect(find.byType(ml.MapLibreMap), findsOneWidget);
+    expect(find.text('نبض القلب'), findsOneWidget);
     expect(find.byIcon(Icons.my_location), findsNothing);
+  });
 
-    await tester.drag(find.byType(FlutterMap), const Offset(-120, -80));
+  testWidgets('non-live map hides the live HUD', (tester) async {
+    final points = [_point(33.3000, 44.3000, 0, 0)];
+    await tester.pumpWidget(harness(points, false));
     await pumpSettled(tester);
 
-    // A recenter button appears once the user has taken over the camera.
-    expect(find.byIcon(Icons.my_location), findsOneWidget);
-
-    await tester.tap(find.byIcon(Icons.my_location));
-    await pumpSettled(tester);
-
-    expect(find.byIcon(Icons.my_location), findsNothing);
+    expect(find.text('نبض القلب'), findsNothing);
   });
 
   testWidgets(
@@ -214,14 +255,18 @@ void main() {
       expect(find.byIcon(Icons.close), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
 
-      // Grab the live onTap callback straight off the built FlutterMap
-      // instead of driving a real touch gesture - screen-pixel -> geo-point
-      // conversion isn't what this test is checking; the wiring is.
-      final options = tester.widget<FlutterMap>(find.byType(FlutterMap)).options;
+      // Grab the live onMapClick callback straight off the built
+      // MapLibreMap instead of driving a real touch gesture - screen-pixel
+      // -> geo-point conversion isn't what this test is checking; the
+      // wiring is. (Same trick the old flutter_map-based test used for
+      // FlutterMap.options.onTap.)
+      final onMapClick = tester
+          .widget<ml.MapLibreMap>(find.byType(ml.MapLibreMap))
+          .onMapClick!;
       await tester.runAsync(() async {
-        options.onTap!(
-          const TapPosition(Offset.zero, Offset.zero),
-          const LatLng(33.3010, 44.3010),
+        onMapClick(
+          const Point(0, 0),
+          const ml.LatLng(33.3010, 44.3010),
         );
         // Give the detached _planRouteTo() Future real time to run its
         // sqlite queries to completion before handing back to fake-async
@@ -230,24 +275,12 @@ void main() {
       });
       await pumpSettled(tester);
 
-      expect(find.byIcon(Icons.location_on), findsOneWidget);
       expect(find.textContaining('1.30 كم'), findsOneWidget);
-      // Only the planned route renders as a polyline - the ride's own
-      // recorded route needs >= 2 points, and this ride has only one.
-      final plannedPolyline = tester
-          .widget<PolylineLayer>(find.byType(PolylineLayer))
-          .polylines
-          .single;
-      expect(plannedPolyline.points, [
-        const LatLng(33.3000, 44.3000),
-        const LatLng(33.3010, 44.3010),
-      ]);
 
       await tester.tap(find.byIcon(Icons.close));
       await pumpSettled(tester);
 
-      expect(find.byIcon(Icons.location_on), findsNothing);
-      expect(find.byType(PolylineLayer), findsNothing);
+      expect(find.textContaining('1.30 كم'), findsNothing);
       // The plan-route button is back, ready to start over.
       expect(find.byIcon(Icons.alt_route), findsOneWidget);
     },
@@ -302,8 +335,8 @@ void main() {
       await pumpSettled(tester);
 
       // Drive the search box's own onChanged callback directly (same
-      // reasoning as grabbing MapOptions.onTap above) inside runAsync, so
-      // both the debounce Timer and the real sqlite FFI query behind it
+      // reasoning as grabbing onMapClick above) inside runAsync, so both
+      // the debounce Timer and the real sqlite FFI query behind it
       // actually get to complete.
       final onChanged = tester
           .widget<TextField>(find.byType(TextField))
@@ -325,7 +358,6 @@ void main() {
       });
       await pumpSettled(tester);
 
-      expect(find.byIcon(Icons.location_on), findsOneWidget);
       expect(find.textContaining('1.30 كم'), findsOneWidget);
     },
   );

@@ -1,9 +1,6 @@
-import 'dart:io';
-
+import 'package:flutter/services.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 
 import 'package:iraq_cycling/main.dart';
 import 'package:iraq_cycling/services/hazard_repository.dart';
@@ -43,18 +40,45 @@ class _NoOpTtsClient implements TtsClient {
 }
 
 void main() {
+  // TrackingScreen renders RideMapView, whose MapLibreMap needs the same
+  // platform-view channel mocking as test/ride_map_view_test.dart (see the
+  // comment there) or building the widget tree throws
+  // MissingPluginException.
+  const platformViewsChannel = MethodChannel('flutter/platform_views');
+  final mockedMapChannels = <MethodChannel>[];
+  setUp(() {
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(platformViewsChannel, (call) async {
+      switch (call.method) {
+        case 'create':
+          final id = call.arguments['id'] as int;
+          final mapChannel = MethodChannel(
+            'plugins.flutter.io/maplibre_gl_$id',
+          );
+          mockedMapChannels.add(mapChannel);
+          TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(mapChannel, (call) async => null);
+          return 0;
+        default:
+          return null;
+      }
+    });
+  });
+  tearDown(() {
+    TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(platformViewsChannel, null);
+    for (final channel in mockedMapChannels) {
+      TestWidgetsFlutterBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    }
+    mockedMapChannels.clear();
+  });
+
   testWidgets('TrackingScreen shows the idle start button', (
     WidgetTester tester,
   ) async {
-    // A temp dir + a client that always fails avoids any real filesystem
-    // setup via path_provider and any real network call to the tile server
-    // during this widget test.
-    final tempDir = Directory.systemTemp.createTempSync('tile_cache_test');
-    addTearDown(() => tempDir.deleteSync(recursive: true));
-
-    final mapTileService = MapTileService(
-      cacheDir: tempDir,
-      httpClient: MockClient((request) async => http.Response('', 404)),
+    final mapTileService = MapTileService.readyForTesting(
+      styleUrl: 'http://127.0.0.1:1/style.json',
     );
 
     final heartRateService = HeartRateService(bleClient: _NoOpBleClient());

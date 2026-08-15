@@ -1,0 +1,191 @@
+schema_name: Baghdad Offline Basemap
+schema_description: Minimal OSM-only vector basemap for iraq_cycling's bundled offline fallback (roads, water, buildings, landuse, place labels) - OpenMapTiles-compatible layer/attribute names so the app's single style.json renders both this and the online OpenFreeMap (OpenMapTiles-schema) source.
+attribution: <a href="https://www.openstreetmap.org/copyright" target="_blank">&copy; OpenStreetMap contributors</a>
+sources:
+  osm:
+    type: osm
+    url: geofabrik:iraq
+    local_path: /tmp/claude-1001/-home-ehsan/0d40149c-e0d1-48de-a6ed-40ffefa4f583/scratchpad/vector_tiles/iraq-latest.osm.pbf
+layers:
+  - id: water
+    features:
+      - source: osm
+        geometry: polygon
+        include_when:
+          natural: water
+        attributes:
+          - key: class
+            value: lake
+
+  - id: waterway
+    features:
+      - source: osm
+        geometry: line
+        min_zoom: 9
+        include_when:
+          waterway: [river, canal]
+        attributes:
+          - key: class
+            value: river
+          - key: name
+
+  - id: building
+    features:
+      - source: osm
+        geometry: polygon
+        min_zoom: 13
+        include_when:
+          building: true
+
+  - id: landuse
+    features:
+      - source: osm
+        geometry: polygon
+        min_zoom: 9
+        include_when:
+          landuse: residential
+        attributes:
+          - key: class
+            value: residential
+      - source: osm
+        geometry: polygon
+        min_zoom: 9
+        include_when:
+          leisure: park
+        attributes:
+          - key: class
+            value: park
+      - source: osm
+        geometry: polygon
+        min_zoom: 9
+        include_when:
+          amenity: hospital
+        attributes:
+          - key: class
+            value: hospital
+      - source: osm
+        geometry: polygon
+        min_zoom: 9
+        include_when:
+          amenity: school
+        attributes:
+          - key: class
+            value: school
+
+  - id: place
+    features:
+      - source: osm
+        geometry: point
+        min_zoom: 8
+        include_when:
+          place: [city, town]
+        attributes:
+          - key: class
+            tag_value: place
+          - key: name
+      - source: osm
+        geometry: point
+        min_zoom: 11
+        include_when:
+          place: [village, suburb, neighbourhood, quarter]
+        attributes:
+          - key: class
+            tag_value: place
+          - key: name
+
+  - id: transportation
+    features:
+      - source: osm
+        geometry: line
+        min_zoom: 4
+        include_when:
+          highway: [motorway, motorway_link]
+        attributes:
+          - key: class
+            value: motorway
+      - source: osm
+        geometry: line
+        min_zoom: 6
+        include_when:
+          highway: [trunk, trunk_link]
+        attributes:
+          - key: class
+            value: trunk
+      - source: osm
+        geometry: line
+        min_zoom: 7
+        include_when:
+          highway: [primary, primary_link]
+        attributes:
+          - key: class
+            value: primary
+      - source: osm
+        geometry: line
+        min_zoom: 9
+        include_when:
+          highway: [secondary, secondary_link]
+        attributes:
+          - key: class
+            value: secondary
+      - source: osm
+        geometry: line
+        min_zoom: 10
+        include_when:
+          highway: [tertiary, tertiary_link]
+        attributes:
+          - key: class
+            value: tertiary
+      - source: osm
+        geometry: line
+        min_zoom: 11
+        include_when:
+          highway: [residential, unclassified, living_street]
+        attributes:
+          - key: class
+            value: minor
+      - source: osm
+        geometry: line
+        min_zoom: 12
+        include_when:
+          highway: [cycleway, path, footway, pedestrian, track, steps]
+        attributes:
+          - key: class
+            value: path
+      - source: osm
+        geometry: line
+        min_zoom: 13
+        include_when:
+          highway: service
+        attributes:
+          - key: class
+            value: service
+
+  - id: transportation_name
+    features:
+      - source: osm
+        geometry: line
+        min_zoom: 10
+        include_when:
+          highway: [motorway, motorway_link, trunk, trunk_link, primary, primary_link]
+        attributes:
+          - key: class
+            value: primary
+          - key: name
+      - source: osm
+        geometry: line
+        min_zoom: 12
+        include_when:
+          highway: [secondary, secondary_link, tertiary, tertiary_link, residential, unclassified, living_street]
+        attributes:
+          - key: class
+            value: minor
+          - key: name
+      - source: osm
+        geometry: line
+        min_zoom: 14
+        include_when:
+          highway: [cycleway, path, footway, pedestrian]
+        attributes:
+          - key: class
+            value: path
+          - key: name

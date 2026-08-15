@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:provider/provider.dart';
 
 import '../models/ride.dart';
@@ -10,6 +10,9 @@ import '../utils/format_utils.dart';
 import '../widgets/stat_column.dart';
 
 const _defaultZoom = 13.0;
+const _boundsFitPadding = 30.0;
+
+ml.LatLng _toMl(LatLng point) => ml.LatLng(point.latitude, point.longitude);
 
 /// Shows a single past ride: its full recorded route as a static polyline
 /// fitted to the route's bounds, plus final ride statistics below.
@@ -62,34 +65,9 @@ class RideDetailScreen extends StatelessWidget {
                           style: TextStyle(color: Colors.white54),
                         ),
                       )
-                    : FlutterMap(
-                        options: MapOptions(
-                          initialCenter: latLngPoints.first,
-                          initialZoom: _defaultZoom,
-                          initialCameraFit: latLngPoints.length >= 2
-                              ? CameraFit.coordinates(
-                                  coordinates: latLngPoints,
-                                  padding: const EdgeInsets.all(30),
-                                )
-                              : null,
-                        ),
-                        children: [
-                          TileLayer(
-                            urlTemplate: MapTileService.tileUrlTemplate,
-                            tileProvider: tileService.tileProvider,
-                            userAgentPackageName: 'com.optisec.iraq_cycling',
-                          ),
-                          if (latLngPoints.length >= 2)
-                            PolylineLayer(
-                              polylines: [
-                                Polyline(
-                                  points: latLngPoints,
-                                  color: Colors.greenAccent,
-                                  strokeWidth: 4,
-                                ),
-                              ],
-                            ),
-                        ],
+                    : _RideRouteMap(
+                        tileService: tileService,
+                        points: latLngPoints,
                       ),
               ),
               Expanded(
@@ -143,6 +121,79 @@ class RideDetailScreen extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// The static route map itself, split out so it can own the
+/// [ml.MapLibreMapController] lifecycle (bounds-fit camera + the one-time
+/// recorded-route line, added once the style has loaded).
+class _RideRouteMap extends StatefulWidget {
+  const _RideRouteMap({required this.tileService, required this.points});
+
+  final MapTileService tileService;
+  final List<LatLng> points;
+
+  @override
+  State<_RideRouteMap> createState() => _RideRouteMapState();
+}
+
+class _RideRouteMapState extends State<_RideRouteMap> {
+  ml.MapLibreMapController? _controller;
+
+  void _onMapCreated(ml.MapLibreMapController controller) {
+    _controller = controller;
+  }
+
+  Future<void> _onStyleLoaded() async {
+    final controller = _controller;
+    if (controller == null) return;
+
+    if (widget.points.length >= 2) {
+      await controller.addLine(
+        ml.LineOptions(
+          geometry: widget.points.map(_toMl).toList(),
+          lineColor: Colors.greenAccent.toHexStringRGB(),
+          lineWidth: 4,
+        ),
+      );
+      if (!mounted) return;
+
+      var minLat = widget.points.first.latitude;
+      var maxLat = widget.points.first.latitude;
+      var minLon = widget.points.first.longitude;
+      var maxLon = widget.points.first.longitude;
+      for (final point in widget.points) {
+        minLat = point.latitude < minLat ? point.latitude : minLat;
+        maxLat = point.latitude > maxLat ? point.latitude : maxLat;
+        minLon = point.longitude < minLon ? point.longitude : minLon;
+        maxLon = point.longitude > maxLon ? point.longitude : maxLon;
+      }
+      await controller.animateCamera(
+        ml.CameraUpdate.newLatLngBounds(
+          ml.LatLngBounds(
+            southwest: ml.LatLng(minLat, minLon),
+            northeast: ml.LatLng(maxLat, maxLon),
+          ),
+          left: _boundsFitPadding,
+          top: _boundsFitPadding,
+          right: _boundsFitPadding,
+          bottom: _boundsFitPadding,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ml.MapLibreMap(
+      styleString: widget.tileService.styleUrl,
+      initialCameraPosition: ml.CameraPosition(
+        target: _toMl(widget.points.first),
+        zoom: _defaultZoom,
+      ),
+      onMapCreated: _onMapCreated,
+      onStyleLoadedCallback: _onStyleLoaded,
     );
   }
 }

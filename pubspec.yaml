@@ -38,7 +38,8 @@ dependencies:
   provider: ^6.1.2
 
   cupertino_icons: ^1.0.8
-  flutter_map: ^8.3.1
+  maplibre_gl: ^0.26.2
+  pmtiles: 1.3.0
   latlong2: ^0.9.1
   http: ^1.6.0
   path_provider: ^2.1.5
@@ -60,6 +61,16 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   sqflite_common_ffi: ^2.3.6
 
+# maplibre_gl's web-platform implementation (maplibre_gl_web, pulled in
+# unconditionally even though this app only targets Android/iOS - see
+# flutter doctor, no web toolchain in use) needs `image` ^4.8+, which needs
+# `archive` ^4.x. `pmtiles` needs `archive` ^3.4.10. Since the web platform
+# code path is never actually exercised, forcing `archive` down to the
+# version `pmtiles` needs is safe in practice even though it technically
+# violates `image`'s stated constraint.
+dependency_overrides:
+  archive: ^3.4.10
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
@@ -77,6 +88,17 @@ flutter:
     # from OSM data - see RoutingGraphSeeder for how this gets copied into
     # the app's live database on first run.
     - assets/routing/baghdad_routing.db
+
+    # Bundled offline vector-tile basemap for Baghdad (OpenMapTiles schema,
+    # PMTiles container), produced by tool/vector_tiles/ from OSM data - see
+    # MapTileService for how this gets copied out to a real file on first
+    # run (PmTilesArchive needs a filesystem path, not an in-bundle asset)
+    # and served as the offline fallback tile source.
+    - assets/vector_tiles/baghdad.pmtiles
+    # MapLibre style (OpenMapTiles schema) shared by both the bundled
+    # offline tiles above and the online OpenFreeMap tiles - see
+    # VectorTileHttpServer.
+    - assets/map_style/baghdad_style.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:
