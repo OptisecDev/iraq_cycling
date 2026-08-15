@@ -158,7 +158,7 @@ void main() {
   }) => MaterialApp(
     home: MultiProvider(
       providers: [
-        ChangeNotifierProvider<MapTileService>.value(value: mapTileService),
+        Provider<MapTileService>.value(value: mapTileService),
         Provider<RouteFinder>.value(value: routeFinder ?? RouteFinder()),
         Provider<PlaceSearchService>.value(
           value: placeSearchService ?? PlaceSearchService(),

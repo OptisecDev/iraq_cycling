@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../services/heart_rate_service.dart';
 import '../services/ride_repository.dart';
 import '../services/ride_tracker.dart';
-import 'download_map_screen.dart';
 import 'hazard_management_screen.dart';
 import 'heart_rate_pairing_screen.dart';
 import 'profile_screen.dart';
@@ -47,13 +46,6 @@ class TrackingScreen extends StatelessWidget {
         toolbarHeight: 44,
         title: const Text('تتبع الرحلة'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.map_outlined),
-            tooltip: 'تحميل الخريطة',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const DownloadMapScreen()),
-            ),
-          ),
           Consumer<HeartRateService>(
             builder: (context, heartRateService, child) {
               final connected =

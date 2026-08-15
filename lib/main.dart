@@ -73,7 +73,7 @@ class MyApp extends StatelessWidget {
           ),
         ),
         Provider<RideRepository>(create: (_) => RideRepository()),
-        ChangeNotifierProvider<MapTileService>.value(value: mapTileService),
+        Provider<MapTileService>.value(value: mapTileService),
         Provider<UserProfileRepository>.value(value: userProfileRepository),
         Provider<HazardRepository>.value(value: hazardRepository),
         Provider<RouteFinder>(create: (_) => RouteFinder()),

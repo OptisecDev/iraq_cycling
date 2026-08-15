@@ -14,7 +14,6 @@ import '../services/place_search_service.dart';
 import '../services/route_finder.dart';
 import '../utils/distance_calculator.dart';
 import '../utils/format_utils.dart';
-import 'download_map_screen.dart';
 
 /// Debounce delay between the user typing in the destination search box and
 /// actually querying [PlaceSearchService] - avoids a query per keystroke.
@@ -26,9 +25,11 @@ const _defaultZoom = 13.0;
 
 /// Zoom range for the navigation camera: closest in when stopped/crawling,
 /// pulled back out at riding speed so more of the road ahead is visible -
-/// mirrors Waze's dynamic zoom. Both ends stay inside the 10-17 range
-/// [BaghdadRegion] pre-caches, so dynamic zoom never asks for tiles that
-/// aren't available offline.
+/// mirrors Waze's dynamic zoom. Both ends stay within [BaghdadRegion]'s
+/// display range; zoom 17 renders via standard client-side vector-tile
+/// overzoom of the offline capture's z14 data (see
+/// `tool/vector_tiles/README.md`), the same way it always has - this isn't
+/// specific to the offline path.
 const _navigationZoomClose = 17.0;
 const _navigationZoomFar = 14.0;
 const _navigationZoomFullSpeedKmh = 30.0;
@@ -541,40 +542,9 @@ class _RideMapViewState extends State<RideMapView> {
     return Stack(
       children: [
         map,
-        if (tileService.hasTileFetchFailures)
-          Positioned(
-            top: 8,
-            left: 12,
-            right: 12,
-            child: Material(
-              color: Colors.black87,
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const DownloadMapScreen()),
-                ),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: Row(
-                    children: [
-                      Icon(Icons.cloud_off, color: Colors.white70, size: 20),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'لا يوجد اتصال بالإنترنت ولا خريطة محمّلة مسبقاً - اضغط للتحميل',
-                          style: TextStyle(color: Colors.white, fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
         if (_pickingDestination)
           Positioned(
-            top: tileService.hasTileFetchFailures ? 56 : 8,
+            top: 8,
             left: 12,
             right: 12,
             child: Material(
@@ -653,7 +623,7 @@ class _RideMapViewState extends State<RideMapView> {
           ),
         if (_destination != null)
           Positioned(
-            top: tileService.hasTileFetchFailures ? 56 : 8,
+            top: 8,
             left: 12,
             right: 12,
             child: Material(
