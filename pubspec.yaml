@@ -60,6 +60,7 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
   sqflite_common_ffi: ^2.3.6
+  flutter_launcher_icons: ^0.14.3
 
 # maplibre_gl's web-platform implementation (maplibre_gl_web, pulled in
 # unconditionally even though this app only targets Android/iOS - see
@@ -70,6 +71,17 @@ dev_dependencies:
 # violates `image`'s stated constraint.
 dependency_overrides:
   archive: ^3.4.10
+
+# App icon (concept 3: "Lapis & Ziggurat Roundel") - regenerate with
+# `dart run flutter_launcher_icons` after changing the source images in
+# assets/app_icon/.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/app_icon/appicon_source.png"
+  adaptive_icon_background: "assets/app_icon/appicon_background.png"
+  adaptive_icon_foreground: "assets/app_icon/appicon_foreground.png"
+  remove_alpha_ios: true
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
