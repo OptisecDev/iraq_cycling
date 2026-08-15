@@ -80,7 +80,7 @@ class MyApp extends StatelessWidget {
         Provider<PlaceSearchService>(create: (_) => PlaceSearchService()),
       ],
       child: MaterialApp(
-        title: 'ركوب الدراجات في العراق',
+        title: 'أسعد',
         debugShowCheckedModeBanner: false,
         locale: const Locale('ar'),
         localizationsDelegates: const [
