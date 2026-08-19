@@ -252,18 +252,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           0,
           (sum, ride) => sum + ride.totalDistanceKm,
         );
-        final ridesWithHeartRate = rides
-            .where((ride) => ride.avgHeartRate != null)
+        final ridesWithMaxHeartRate = rides
+            .where((ride) => ride.maxHeartRate != null)
             .toList();
-        // "Highest recorded BPM" per the original request isn't something
-        // this app stores — only a per-ride *average* HR is persisted, not
-        // a peak instantaneous sample. This is the highest of those
-        // per-ride averages, labelled accordingly rather than overclaiming
-        // precision the data doesn't have. See PROJECT_STATE.md.
-        final highestAvgHeartRate = ridesWithHeartRate.isEmpty
+        final highestMaxHeartRate = ridesWithMaxHeartRate.isEmpty
             ? null
-            : ridesWithHeartRate
-                  .map((ride) => ride.avgHeartRate!)
+            : ridesWithMaxHeartRate
+                  .map((ride) => ride.maxHeartRate!)
                   .reduce((a, b) => a > b ? a : b);
 
         return Row(
@@ -275,8 +270,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             StatColumn(label: 'عدد الرحلات', value: rides.length.toString()),
             StatColumn(
-              label: 'أعلى متوسط نبض لرحلة',
-              value: highestAvgHeartRate?.toStringAsFixed(0) ?? '--',
+              label: 'أعلى نبض قلب مسجل',
+              value: highestMaxHeartRate?.toStringAsFixed(0) ?? '--',
             ),
           ],
         );

@@ -6,10 +6,15 @@ import 'app_database.dart';
 
 /// Fully offline local storage for rides — no network calls in this file.
 class RideRepository {
+  /// [databasePath], if provided, is passed through to [openAppDatabase] —
+  /// only tests need this, to point at an isolated temp database.
+  RideRepository({String? databasePath}) : _databasePath = databasePath;
+
+  final String? _databasePath;
   Database? _database;
 
   Future<Database> get _db async {
-    _database ??= await openAppDatabase();
+    _database ??= await openAppDatabase(overridePath: _databasePath);
     return _database!;
   }
 
@@ -35,10 +40,15 @@ class RideRepository {
     return ride.copyWith(id: rideId);
   }
 
-  /// Rides only, without points, for fast list display.
+  /// Rides only, without points, for fast list display — newest-first by
+  /// when the ride ended (falling back to start_time for the rare row with
+  /// no end_time, e.g. an interrupted ride that was still saved).
   Future<List<Ride>> getAllRidesSummary() async {
     final db = await _db;
-    final rows = await db.query('rides', orderBy: 'start_time DESC');
+    final rows = await db.query(
+      'rides',
+      orderBy: 'COALESCE(end_time, start_time) DESC',
+    );
     return rows.map((row) => Ride.fromMap(row)).toList();
   }
 
@@ -68,5 +78,12 @@ class RideRepository {
   Future<void> deleteRide(int rideId) async {
     final db = await _db;
     await db.delete('rides', where: 'id = ?', whereArgs: [rideId]);
+  }
+
+  /// Deletes every saved ride (and, via ON DELETE CASCADE, their points).
+  /// Irreversible — callers must confirm with the user first.
+  Future<void> clearAllHistory() async {
+    final db = await _db;
+    await db.delete('rides');
   }
 }

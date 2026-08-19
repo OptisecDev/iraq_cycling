@@ -9,6 +9,7 @@ class Ride {
   final double maxSpeedMps;
   final double totalElevationGainMeters;
   final double? avgHeartRate;
+  final double? maxHeartRate;
   final double? caloriesBurned;
 
   Ride({
@@ -20,6 +21,7 @@ class Ride {
     this.maxSpeedMps = 0,
     this.totalElevationGainMeters = 0,
     this.avgHeartRate,
+    this.maxHeartRate,
     this.caloriesBurned,
   });
 
@@ -47,6 +49,7 @@ class Ride {
       'max_speed_mps': maxSpeedMps,
       'total_elevation_gain_meters': totalElevationGainMeters,
       'avg_heart_rate': avgHeartRate,
+      'max_heart_rate': maxHeartRate,
       'calories_burned': caloriesBurned,
     };
   }
@@ -66,6 +69,7 @@ class Ride {
       maxSpeedMps: map['max_speed_mps'] as double,
       totalElevationGainMeters: map['total_elevation_gain_meters'] as double,
       avgHeartRate: map['avg_heart_rate'] as double?,
+      maxHeartRate: map['max_heart_rate'] as double?,
       caloriesBurned: map['calories_burned'] as double?,
     );
   }
@@ -79,6 +83,7 @@ class Ride {
     double? maxSpeedMps,
     double? totalElevationGainMeters,
     double? avgHeartRate,
+    double? maxHeartRate,
     double? caloriesBurned,
   }) {
     return Ride(
@@ -91,6 +96,7 @@ class Ride {
       totalElevationGainMeters:
           totalElevationGainMeters ?? this.totalElevationGainMeters,
       avgHeartRate: avgHeartRate ?? this.avgHeartRate,
+      maxHeartRate: maxHeartRate ?? this.maxHeartRate,
       caloriesBurned: caloriesBurned ?? this.caloriesBurned,
     );
   }

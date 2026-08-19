@@ -107,6 +107,11 @@ class RideDetailScreen extends StatelessWidget {
                             label: 'معدل نبض القلب',
                             value: ride.avgHeartRate!.toStringAsFixed(0),
                           ),
+                        if (ride.maxHeartRate != null)
+                          StatColumn(
+                            label: 'أقصى نبض قلب',
+                            value: ride.maxHeartRate!.toStringAsFixed(0),
+                          ),
                         if (ride.caloriesBurned != null)
                           StatColumn(
                             label: 'السعرات الحرارية',

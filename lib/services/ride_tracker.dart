@@ -50,6 +50,7 @@ class RideTracker extends ChangeNotifier {
   StreamSubscription<int>? _bpmSubscription;
   int _bpmSum = 0;
   int _bpmSampleCount = 0;
+  int _maxBpm = 0;
   LiveCalorieAccumulator? _liveCalorieAccumulator;
 
   StreamSubscription<Position>? _positionSubscription;
@@ -89,6 +90,7 @@ class RideTracker extends ChangeNotifier {
     _instantSpeedMps = 0;
     _bpmSum = 0;
     _bpmSampleCount = 0;
+    _maxBpm = 0;
     final profile = _userProfileRepository?.current;
     _liveCalorieAccumulator = LiveCalorieAccumulator(
       weightKg: resolveWeightKg(profile?.weightKg),
@@ -136,6 +138,9 @@ class RideTracker extends ChangeNotifier {
     if (_state != TrackingState.tracking) return;
     _bpmSum += bpm;
     _bpmSampleCount += 1;
+    if (bpm > _maxBpm) {
+      _maxBpm = bpm;
+    }
     _liveCalorieAccumulator?.addSample(bpm);
     notifyListeners();
   }
@@ -244,9 +249,11 @@ class RideTracker extends ChangeNotifier {
     // Null when no heart rate sensor was connected for this ride — the
     // ride is saved exactly as it was in Phase 1 in that case.
     final avgHeartRate = _bpmSampleCount > 0 ? _bpmSum / _bpmSampleCount : null;
+    final maxHeartRate = _bpmSampleCount > 0 ? _maxBpm.toDouble() : null;
     final finishedRide = ride.copyWith(
       endTime: DateTime.now(),
       avgHeartRate: avgHeartRate,
+      maxHeartRate: maxHeartRate,
     );
     final profile = _userProfileRepository?.current;
     final caloriesBurned = estimateCaloriesBurned(
@@ -278,6 +285,7 @@ class RideTracker extends ChangeNotifier {
     _instantSpeedMps = 0;
     _bpmSum = 0;
     _bpmSampleCount = 0;
+    _maxBpm = 0;
     _liveCalorieAccumulator = null;
     _triggeredHazardIds.clear();
     _hazards = const [];
