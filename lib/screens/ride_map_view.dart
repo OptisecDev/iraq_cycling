@@ -81,6 +81,27 @@ double dynamicZoomFor(double speedMps) {
 
 ml.LatLng _toMl(LatLng point) => ml.LatLng(point.latitude, point.longitude);
 
+/// Whether the follow-camera should re-target for this widget update: only
+/// when the rider has actually reached a new recorded point since the last
+/// time the camera followed, not on every rebuild a live ride triggers -
+/// `RideTracker.notifyListeners()` also fires on every heart-rate sample
+/// (roughly once a second from a connected BLE strap), which reconstructs
+/// this widget with the exact same `points` list. Without this check,
+/// `didUpdateWidget` was re-issuing an identical `animateCamera` call on
+/// every one of those unrelated rebuilds, restarting/interrupting the
+/// camera's ease mid-flight and producing visible stutter that only shows
+/// up with a real device and a paired heart-rate sensor feeding samples in
+/// alongside real (irregularly-timed) GPS fixes - not in a GPS-only
+/// simulation. Pure and top-level for the same testability reason as
+/// [headingBetween]/[dynamicZoomFor]: the platform view controller is never
+/// available in a widget test (see the file-level comment in
+/// `test/ride_map_view_test.dart`), so this decision has to be checkable
+/// without one.
+bool shouldFollowCamera(RidePoint? lastFollowedPoint, RidePoint? currentLast) {
+  if (currentLast == null) return false;
+  return !identical(lastFollowedPoint, currentLast);
+}
+
 /// Live map for the tracking screen: draws the current ride's route as it is
 /// recorded and follows the current position, unless the user has manually
 /// panned/zoomed - in which case a "recenter" button reappears instead of
@@ -157,6 +178,10 @@ class _RideMapViewState extends State<RideMapView> {
   final LocationService _locationService = LocationService();
   bool _followEnabled = true;
   double _heading = 0;
+
+  // The last point the follow-camera actually re-targeted to - see
+  // shouldFollowCamera above.
+  RidePoint? _lastFollowedPoint;
 
   // Route-planning state, independent of the ride's own recorded route
   // above. Triggered by the "plan route" button, not a hidden gesture: the
@@ -285,20 +310,22 @@ class _RideMapViewState extends State<RideMapView> {
       // Tracking just stopped: drop back to a flat, north-up view instead of
       // leaving it stuck at whatever heading/tilt it last had.
       _heading = 0;
+      _lastFollowedPoint = null;
       _driveCameraOrientation(bearing: 0, tilt: 0);
       _syncAnnotations();
       return;
     }
 
-    if (widget.isLive && _followEnabled && widget.points.isNotEmpty) {
+    final last = widget.points.isNotEmpty ? widget.points.last : null;
+    if (widget.isLive && _followEnabled && shouldFollowCamera(_lastFollowedPoint, last)) {
       _updateHeading();
-      final last = widget.points.last;
       _driveCamera(
-        target: LatLng(last.latitude, last.longitude),
+        target: LatLng(last!.latitude, last.longitude),
         zoom: dynamicZoomFor(last.speed),
         bearing: _heading,
         tilt: _navigationTiltDegrees,
       );
+      _lastFollowedPoint = last;
     }
     _syncAnnotations();
   }
@@ -372,6 +399,7 @@ class _RideMapViewState extends State<RideMapView> {
         bearing: _heading,
         tilt: _navigationTiltDegrees,
       );
+      _lastFollowedPoint = last;
     }
   }
 

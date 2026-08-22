@@ -59,10 +59,26 @@ class ReactiveBleClient implements BleClient {
 /// standard BLE Heart Rate Service device. Entirely optional to the rest of
 /// the app: nothing here is required for GPS ride tracking to work.
 class HeartRateService extends ChangeNotifier {
-  HeartRateService({BleClient? bleClient})
-    : _ble = bleClient ?? ReactiveBleClient();
+  HeartRateService({BleClient? bleClient, DateTime Function()? now})
+    : _ble = bleClient ?? ReactiveBleClient(),
+      _now = now ?? DateTime.now;
 
   final BleClient _ble;
+  // Overridable clock so tests can control elapsed time deterministically
+  // (the stable-connection check below depends on it) instead of racing a
+  // real 5-second wait - see test/heart_rate_service_test.dart.
+  final DateTime Function() _now;
+
+  /// Minimum time a connection must have been held for its later drop to
+  /// count as a genuine mid-ride loss of signal (worth retrying
+  /// indefinitely - see [_handleDisconnect]) rather than the initial
+  /// handshake churn a device already held by another app can produce
+  /// (bounded to one retry, same as before).
+  static const _stableConnectionThreshold = Duration(seconds: 5);
+
+  DateTime? _connectedSince;
+  bool _hadStableConnection = false;
+  bool _userInitiatedDisconnect = false;
 
   HeartRateConnectionState _connectionState =
       HeartRateConnectionState.disconnected;
@@ -157,6 +173,8 @@ class HeartRateService extends ChangeNotifier {
 
   Future<void> connect(String deviceId) async {
     stopScan();
+    _userInitiatedDisconnect = false;
+    _hadStableConnection = false;
     _retriesLeft = 1;
     _connect(deviceId);
   }
@@ -196,6 +214,7 @@ class HeartRateService extends ChangeNotifier {
       case DeviceConnectionState.connected:
         _connectedDeviceId = update.deviceId;
         _connectionState = HeartRateConnectionState.connected;
+        _connectedSince = _now();
         // Deliberately not resetting _retriesLeft here. A device that's
         // already held by another app (e.g. its own vendor app) can flap
         // connecting -> briefly "connected" -> disconnected repeatedly
@@ -204,7 +223,8 @@ class HeartRateService extends ChangeNotifier {
         // in that case (confirmed via on-device logcat: native connect()
         // calls continuing well after the UI already reported
         // "disconnected"). The budget is only set by the user-initiated
-        // connect() entry point now.
+        // connect() entry point now - a *stable* connection instead gets an
+        // unbounded retry policy on drop, via _hadStableConnection below.
         notifyListeners();
         _subscribeToMeasurement(update.deviceId);
       case DeviceConnectionState.disconnected:
@@ -249,20 +269,50 @@ class HeartRateService extends ChangeNotifier {
     _measurementSubscription?.cancel();
     _measurementSubscription = null;
 
+    final connectedSince = _connectedSince;
+    _connectedSince = null;
+    if (connectedSince != null &&
+        _now().difference(connectedSince) >= _stableConnectionThreshold) {
+      _hadStableConnection = true;
+    }
+
+    if (_userInitiatedDisconnect) {
+      _finalizeDisconnect();
+      return;
+    }
+
+    if (_hadStableConnection) {
+      // A real mid-ride signal loss (out of range, interference, the phone
+      // screen locking) after a connection that actually held for a while
+      // - keep retrying indefinitely instead of silently going dark for
+      // the rest of the ride, since the rider has no safe way to reopen
+      // the pairing screen and press "connect" again while cycling. This
+      // was the real cause of heart-rate/calories going blank mid-ride on
+      // a real device: the bounded single-retry policy below was giving
+      // up permanently after one failed reconnect attempt.
+      _connectionState = HeartRateConnectionState.connecting;
+      notifyListeners();
+      _connect(deviceId);
+      return;
+    }
+
     if (_retriesLeft > 0) {
       _retriesLeft -= 1;
       _connect(deviceId);
       return;
     }
 
-    // Giving up: cancel the connection stream rather than leaving it
-    // listening. connectToDevice() keeps retrying at the native BLE layer
-    // for as long as its subscription is alive, regardless of what state
-    // it last reported — without this, the app would keep silently
-    // hammering the device with reconnect attempts forever after already
-    // telling the user it gave up (confirmed via on-device logcat: native
-    // connect() calls continued every ~10s long after the UI settled on
-    // "disconnected").
+    // Giving up: a connection that never proved itself stable (the
+    // handshake-churn case a device held by another app can produce) is
+    // still bounded to one retry, same as before.
+    _finalizeDisconnect();
+  }
+
+  /// Cancels the connection stream (rather than leaving it listening -
+  /// connectToDevice() keeps retrying at the native BLE layer for as long
+  /// as its subscription is alive, regardless of what state it last
+  /// reported) and resets to disconnected.
+  void _finalizeDisconnect() {
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
 
@@ -275,15 +325,11 @@ class HeartRateService extends ChangeNotifier {
   /// Disconnects the current device (if any) and resets to idle. Does not
   /// stop an in-progress scan; call [stopScan] separately if needed.
   void disconnect() {
-    _connectionSubscription?.cancel();
-    _connectionSubscription = null;
-    _measurementSubscription?.cancel();
-    _measurementSubscription = null;
-    _connectedDeviceId = null;
-    _latestBpm = null;
+    _userInitiatedDisconnect = true;
+    _connectedSince = null;
+    _hadStableConnection = false;
     _retriesLeft = 0;
-    _connectionState = HeartRateConnectionState.disconnected;
-    notifyListeners();
+    _finalizeDisconnect();
   }
 
   @override

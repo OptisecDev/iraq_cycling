@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iraq_cycling/models/ride.dart';
 import 'package:iraq_cycling/models/ride_point.dart';
+import 'package:iraq_cycling/services/app_database.dart';
 import 'package:iraq_cycling/services/ride_repository.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -30,6 +31,7 @@ void main() {
     required DateTime endTime,
     List<RidePoint> points = const [],
     double? maxHeartRate,
+    int pausedDurationMs = 0,
   }) {
     return Ride(
       startTime: startTime,
@@ -41,6 +43,7 @@ void main() {
       avgHeartRate: 120,
       maxHeartRate: maxHeartRate,
       caloriesBurned: 200,
+      pausedDurationMs: pausedDurationMs,
     );
   }
 
@@ -81,6 +84,52 @@ void main() {
       expect(reloaded.totalDistanceMeters, 1000);
       expect(reloaded.startTime, DateTime(2026, 1, 1, 8));
       expect(reloaded.endTime, DateTime(2026, 1, 1, 9));
+    },
+  );
+
+  test(
+    'saveRide then getRideWithPoints round-trips pausedDurationMs, and the '
+    'reloaded duration still excludes it',
+    () async {
+      final repository = RideRepository(databasePath: dbPath);
+      final ride = buildRide(
+        startTime: DateTime(2026, 1, 1, 8, 0),
+        endTime: DateTime(2026, 1, 1, 9, 0),
+        pausedDurationMs: const Duration(minutes: 10).inMilliseconds,
+      );
+
+      final saved = await repository.saveRide(ride);
+      final reloaded = await repository.getRideWithPoints(saved.id!);
+
+      expect(reloaded, isNotNull);
+      expect(
+        reloaded!.pausedDurationMs,
+        const Duration(minutes: 10).inMilliseconds,
+      );
+      // 1 hour wall-clock minus the 10 paused minutes.
+      expect(reloaded.duration, const Duration(minutes: 50));
+    },
+  );
+
+  test(
+    'a row written without an explicit paused_duration_ms (e.g. via the '
+    'appDbVersion 7->8 ALTER TABLE backfill) reloads as an unpaused ride',
+    () async {
+      final db = await openAppDatabase(overridePath: dbPath);
+      final id = await db.insert('rides', {
+        'start_time': DateTime(2026, 1, 1, 8, 0).millisecondsSinceEpoch,
+        'end_time': DateTime(2026, 1, 1, 9, 0).millisecondsSinceEpoch,
+        'total_distance_meters': 1000.0,
+        'max_speed_mps': 10.0,
+        'total_elevation_gain_meters': 5.0,
+      });
+
+      final repository = RideRepository(databasePath: dbPath);
+      final reloaded = await repository.getRideWithPoints(id);
+
+      expect(reloaded, isNotNull);
+      expect(reloaded!.pausedDurationMs, 0);
+      expect(reloaded.duration, const Duration(hours: 1));
     },
   );
 

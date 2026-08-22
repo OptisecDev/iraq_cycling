@@ -117,6 +117,33 @@ void main() {
     });
   });
 
+  group('shouldFollowCamera', () {
+    test('follows the first point once one exists', () {
+      final point = _point(33.3000, 44.3000, 0, 0);
+      expect(shouldFollowCamera(null, point), isTrue);
+    });
+
+    test('does not re-follow the same point on a repeat rebuild', () {
+      // Mirrors a rebuild triggered by something other than a new GPS fix
+      // (e.g. a heart-rate sample) - RideTracker.notifyListeners() fires
+      // for both, but widget.points.last is the exact same RidePoint
+      // instance in the BPM-only case since RideTracker only appends a new
+      // one on a valid GPS fix.
+      final point = _point(33.3000, 44.3000, 0, 0);
+      expect(shouldFollowCamera(point, point), isFalse);
+    });
+
+    test('follows again once a genuinely new point is recorded', () {
+      final first = _point(33.3000, 44.3000, 0, 0);
+      final second = _point(33.3001, 44.3001, 0, 5);
+      expect(shouldFollowCamera(first, second), isTrue);
+    });
+
+    test('does not follow when there is no current point', () {
+      expect(shouldFollowCamera(null, null), isFalse);
+    });
+  });
+
   group('dynamicZoomFor', () {
     test('zooms all the way in when stopped', () {
       expect(dynamicZoomFor(0), closeTo(17.0, 0.001));

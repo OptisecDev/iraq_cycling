@@ -11,7 +11,7 @@ import 'package:sqflite/sqflite.dart';
 /// [openAppDatabase] from the same isolate return the same live connection,
 /// so this is safe to call from multiple repositories.
 const String appDbName = 'iraq_cycling.db';
-const int appDbVersion = 7;
+const int appDbVersion = 8;
 
 /// [overridePath], if provided, is opened directly instead of resolving a
 /// path via `getDatabasesPath()` — only tests need this, to point at an
@@ -56,6 +56,11 @@ Future<Database> openAppDatabase({String? overridePath}) async {
       if (oldVersion < 7) {
         await db.execute('ALTER TABLE rides ADD COLUMN max_heart_rate REAL');
       }
+      if (oldVersion < 8) {
+        await db.execute(
+          'ALTER TABLE rides ADD COLUMN paused_duration_ms INTEGER NOT NULL DEFAULT 0',
+        );
+      }
     },
   );
 }
@@ -73,7 +78,8 @@ Future<void> _createRideTables(Database db) async {
       total_elevation_gain_meters REAL NOT NULL,
       avg_heart_rate REAL,
       max_heart_rate REAL,
-      calories_burned REAL
+      calories_burned REAL,
+      paused_duration_ms INTEGER NOT NULL DEFAULT 0
     )
   ''');
 

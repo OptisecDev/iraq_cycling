@@ -25,13 +25,19 @@ class RideTracker extends ChangeNotifier {
     UserProfileRepository? userProfileRepository,
     HazardRepository? hazardRepository,
     VoiceAlertService? voiceAlertService,
+    DateTime Function()? now,
   }) : _locationService = locationService ?? LocationService(),
        _heartRateService = heartRateService,
        _userProfileRepository = userProfileRepository,
        _hazardRepository = hazardRepository,
-       _voiceAlertService = voiceAlertService;
+       _voiceAlertService = voiceAlertService,
+       _now = now ?? DateTime.now;
 
   final LocationService _locationService;
+  // Overridable clock so tests can control elapsed wall-clock time
+  // deterministically (pause/resume duration math below depends on it)
+  // instead of racing real Future.delayed calls - see test/ride_tracker_test.dart.
+  final DateTime Function() _now;
   // Optional: a ride tracks and saves fine with no heart rate sensor
   // connected at all — this stays null in that case and avgHeartRate is
   // simply never computed.
@@ -54,6 +60,14 @@ class RideTracker extends ChangeNotifier {
   LiveCalorieAccumulator? _liveCalorieAccumulator;
 
   StreamSubscription<Position>? _positionSubscription;
+
+  // Total time spent paused so far, plus the start of the currently-open
+  // pause span (if any) - see pauseRide/resumeRide. [Ride.duration]
+  // subtracts the total from wall-clock elapsed time, so a stop at a
+  // traffic light doesn't inflate the saved ride's duration and deflate
+  // its average speed.
+  int _pausedDurationMs = 0;
+  DateTime? _pausedAt;
 
   TrackingState _state = TrackingState.idle;
   TrackingState get state => _state;
@@ -91,6 +105,8 @@ class RideTracker extends ChangeNotifier {
     _bpmSum = 0;
     _bpmSampleCount = 0;
     _maxBpm = 0;
+    _pausedDurationMs = 0;
+    _pausedAt = null;
     final profile = _userProfileRepository?.current;
     _liveCalorieAccumulator = LiveCalorieAccumulator(
       weightKg: resolveWeightKg(profile?.weightKg),
@@ -100,7 +116,7 @@ class RideTracker extends ChangeNotifier {
     _triggeredHazardIds.clear();
     _hazards = await _hazardRepository?.getAll() ?? const [];
 
-    _currentRide = Ride(startTime: DateTime.now());
+    _currentRide = Ride(startTime: _now());
     _state = TrackingState.tracking;
 
     _positionSubscription = _locationService.positionStream.listen(
@@ -223,14 +239,30 @@ class RideTracker extends ChangeNotifier {
 
   void pauseRide() {
     if (_state != TrackingState.tracking) return;
+    _pausedAt = _now();
     _state = TrackingState.paused;
     notifyListeners();
   }
 
   void resumeRide() {
     if (_state != TrackingState.paused) return;
+    _closeOpenPauseSpan();
     _state = TrackingState.tracking;
+    // Reflects the now-larger pausedDurationMs immediately, so the elapsed
+    // time shown resumes right where it was at the moment of pausing
+    // instead of jumping forward by however long the pause lasted.
+    _currentRide = _currentRide?.copyWith(pausedDurationMs: _pausedDurationMs);
     notifyListeners();
+  }
+
+  /// Folds the currently-open pause span (if any) into [_pausedDurationMs]
+  /// and clears it. Called on resume, and also on [finishRide] in case the
+  /// rider ends the ride while still paused instead of resuming first.
+  void _closeOpenPauseSpan() {
+    final pausedAt = _pausedAt;
+    if (pausedAt == null) return;
+    _pausedDurationMs += _now().difference(pausedAt).inMilliseconds;
+    _pausedAt = null;
   }
 
   Ride? finishRide() {
@@ -238,6 +270,9 @@ class RideTracker extends ChangeNotifier {
     _positionSubscription = null;
     _bpmSubscription?.cancel();
     _bpmSubscription = null;
+    // Finishing directly from paused (without resuming first) must still
+    // exclude that open pause span from the saved duration.
+    _closeOpenPauseSpan();
 
     final ride = _currentRide;
     if (ride == null) {
@@ -251,9 +286,10 @@ class RideTracker extends ChangeNotifier {
     final avgHeartRate = _bpmSampleCount > 0 ? _bpmSum / _bpmSampleCount : null;
     final maxHeartRate = _bpmSampleCount > 0 ? _maxBpm.toDouble() : null;
     final finishedRide = ride.copyWith(
-      endTime: DateTime.now(),
+      endTime: _now(),
       avgHeartRate: avgHeartRate,
       maxHeartRate: maxHeartRate,
+      pausedDurationMs: _pausedDurationMs,
     );
     final profile = _userProfileRepository?.current;
     final caloriesBurned = estimateCaloriesBurned(
@@ -286,6 +322,8 @@ class RideTracker extends ChangeNotifier {
     _bpmSum = 0;
     _bpmSampleCount = 0;
     _maxBpm = 0;
+    _pausedDurationMs = 0;
+    _pausedAt = null;
     _liveCalorieAccumulator = null;
     _triggeredHazardIds.clear();
     _hazards = const [];

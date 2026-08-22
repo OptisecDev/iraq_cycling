@@ -12,6 +12,13 @@ class Ride {
   final double? maxHeartRate;
   final double? caloriesBurned;
 
+  /// Total time spent in [TrackingState.paused] so far (e.g. stopped at a
+  /// traffic light), accumulated by [RideTracker.pauseRide]/[resumeRide].
+  /// Subtracted out of [duration] below, so a paused stretch doesn't count
+  /// as moving time in the elapsed-time display or in [avgSpeedKmh] - see
+  /// PROJECT_STATE.md for the real-device report this fixes.
+  final int pausedDurationMs;
+
   Ride({
     this.id,
     required this.startTime,
@@ -23,11 +30,14 @@ class Ride {
     this.avgHeartRate,
     this.maxHeartRate,
     this.caloriesBurned,
+    this.pausedDurationMs = 0,
   });
 
   Duration get duration {
     final end = endTime ?? DateTime.now();
-    return end.difference(startTime);
+    final raw = end.difference(startTime);
+    final effective = raw - Duration(milliseconds: pausedDurationMs);
+    return effective.isNegative ? Duration.zero : effective;
   }
 
   double get avgSpeedKmh {
@@ -51,6 +61,7 @@ class Ride {
       'avg_heart_rate': avgHeartRate,
       'max_heart_rate': maxHeartRate,
       'calories_burned': caloriesBurned,
+      'paused_duration_ms': pausedDurationMs,
     };
   }
 
@@ -71,6 +82,8 @@ class Ride {
       avgHeartRate: map['avg_heart_rate'] as double?,
       maxHeartRate: map['max_heart_rate'] as double?,
       caloriesBurned: map['calories_burned'] as double?,
+      // Absent on rows written before appDbVersion 8 - treat as unpaused.
+      pausedDurationMs: map['paused_duration_ms'] as int? ?? 0,
     );
   }
 
@@ -85,6 +98,7 @@ class Ride {
     double? avgHeartRate,
     double? maxHeartRate,
     double? caloriesBurned,
+    int? pausedDurationMs,
   }) {
     return Ride(
       id: id ?? this.id,
@@ -98,6 +112,7 @@ class Ride {
       avgHeartRate: avgHeartRate ?? this.avgHeartRate,
       maxHeartRate: maxHeartRate ?? this.maxHeartRate,
       caloriesBurned: caloriesBurned ?? this.caloriesBurned,
+      pausedDurationMs: pausedDurationMs ?? this.pausedDurationMs,
     );
   }
 }
